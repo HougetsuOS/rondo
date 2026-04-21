@@ -1,0 +1,7 @@
+*.o
+rondo
+rondomgr/rondomgr
+*.log
+*~
+backlog
+PLAN.md

@@ -1,0 +1,365 @@
+;; rondo — example configuration
+;; Place at ~/.rondorc or ~/.config/rondo/config.scm
+;; All settings shown with their default values.
+;; Lines starting with ;; are comments.
+
+;; ═══════════════════════════════════════════════════════════════════════
+;;  DIMENSIONS
+;; ═══════════════════════════════════════════════════════════════════════
+
+;; Thickness of the 3D beveled border drawn around each window frame.
+;; This also determines the inset between the frame edge and the client
+;; content on the left, right, and bottom sides.
+(frame-width 6)
+
+;; Height of the title bar at the top of each window frame (pixels).
+;; The title bar shows the window name and the minimize/maximize/close
+;; buttons.
+(title-height 18)
+
+;; Width of the title-bar buttons (minimize, maximize, close) (pixels).
+(btn-width 18)
+
+;; Height of the title-bar buttons (pixels).
+(btn-height 18)
+
+;; ═══════════════════════════════════════════════════════════════════════
+;;  STATUS BAR
+;; ═══════════════════════════════════════════════════════════════════════
+
+;; Height of the status bar (pixels).
+(bar-height 26)
+
+;; Thickness of the 3D beveled border around the bar (pixels).
+(bar-border-width 6)
+
+;; Size of the corner regions where two borders meet (pixels).  These
+;; corners use the stretcher-corner drawing style (like Motif mwm).
+(bar-corner-size 24)
+
+;; Width of each workspace-number button in the bar (pixels).
+(bar-btn-width 18)
+
+;; 1 = show the bar, 0 = hide it.  You can also toggle at runtime
+;; with the swapbar keybinding (default Alt+Shift+b).
+(show-bar 1)
+
+;; Which screen edge the bar sits on: top, bottom, left, right.
+(bar-position top)
+
+;; Ordered list of (type align) pairs that defines what is displayed
+;; in the bar and where.
+;;
+;; Types:
+;;   ws     — workspace number buttons (1 per workspace)
+;;   title  — focused window title (expands to fill remaining space)
+;;   clock  — date/time (see clock-format below)
+;;   load   — system load average
+;;   mem    — memory usage percentage
+;;   disk   — disk usage percentage (root filesystem)
+;;   bat    — battery percentage
+;;   vol    — audio volume percentage
+;;   cpu    — CPU usage percentage
+;;   net    — network interface status
+;;   temp   — CPU temperature
+;;
+;; Align: left or right
+(bar-layout
+  (ws    left)
+  (title right)
+  (bat   right)
+  (vol   right)
+  (cpu   right)
+  (net   right)
+  (temp  right)
+  (load  right)
+  (mem   right)
+  (disk  right)
+  (clock right))
+
+;; strftime format string for the clock widget.
+;; Some common examples:
+;;   " %a %m/%d %H:%M "       — Fri 04/18 21:42
+;;   " %Y-%m-%d %H:%M "       — 2026-04-18 21:42
+;;   " %a %d %b %H:%M:%S "    — Fri 18 Apr 21:42:30
+(clock-format " %a %m/%d %H:%M ")
+
+;; ═══════════════════════════════════════════════════════════════════════
+;;  ICON BAR  (minimized window icons)
+;; ═══════════════════════════════════════════════════════════════════════
+
+;; Width and height of each icon thumbnail in the icon bar (pixels).
+(icon-width 56)
+(icon-height 56)
+
+;; Spacing between adjacent icons in the icon bar (pixels).
+(icon-padding 4)
+
+;; How each minimized window is represented in the icon bar:
+;;   icon      — show only the application icon
+;;   text      — show only the window title text
+;;   icon-text — show icon above title text
+(icon-mode icon-text)
+
+;; Which screen edge the icon bar sits on: top, bottom, left, right.
+;; The icon bar only appears when at least one window is minimized.
+(iconbar-position left)
+
+;; ═══════════════════════════════════════════════════════════════════════
+;;  LAYOUT
+;; ═══════════════════════════════════════════════════════════════════════
+
+;; Number of virtual workspaces (1–9).  Each workspace has its own
+;; tiling layout; you switch between them with the viewworkspace
+;; keybinding or by clicking the workspace buttons in the bar.
+(workspaces 9)
+
+;; Ratio of the master area to the total tiled area (0.0–1.0).
+;; 0.55 means the master window gets 55 % of the screen width.
+;; Adjust at runtime with the incmaster keybinding.
+(master-ratio 0.55)
+
+;; ═══════════════════════════════════════════════════════════════════════
+;;  COMPOSITING  (fade in/out)
+;; ═══════════════════════════════════════════════════════════════════════
+
+;; Enable fade animations when windows are mapped (fade in) or
+;; destroyed (fade out).  0 = instant, no animation.
+(fade-enabled 1)
+
+;; Duration of the fade-in animation when a new window appears (ms).
+(fade-in-ms 150)
+
+;; Duration of the fade-out animation when a window is closed (ms).
+(fade-out-ms 150)
+
+;; How long the pointer must hover over an icon bar entry before the
+;; tooltip appears (ms).  Set to 0 for instant tooltips.
+(tooltip-delay 3000)
+
+;; ═══════════════════════════════════════════════════════════════════════
+;;  PROGRAMS
+;; ═══════════════════════════════════════════════════════════════════════
+
+;; Xft font name used for the title bar, bar, menus, and dialogs.
+;; Examples: "monospace:size=10", "DejaVu Sans Mono-10", "Terminus-12"
+(font "monospace:size=10")
+
+;; Command executed by the first spawn keybinding with no explicit arg.
+(terminal "xterm")
+
+;; Command executed by the second spawn keybinding with no explicit arg.
+(launcher "dmenu_run")
+
+;; Modifier key used for window-manager keybindings.
+;; Can be: Alt, Super, Shift, Ctrl, or a combination with +:
+;;   "Alt", "Super", "Alt+Shift", "Ctrl+Alt"
+(modkey "Alt")
+
+;; ═══════════════════════════════════════════════════════════════════════
+;;  WINDOW FRAME COLORS
+;; ═══════════════════════════════════════════════════════════════════════
+
+;; Title bar background of the focused window.
+(title-focus "#5F9EA0")
+
+;; Title bar background of unfocused windows.
+(title-unfocus "#A8A8A8")
+
+;; Title text color (used on both focused and unfocused title bars).
+(title-fg "#FFFFFF")
+
+;; Highlight (light) edge of the 3D beveled frame border.
+(frame-light "#D9D9D9")
+
+;; Shadow (dark) edge of the 3D beveled frame border.
+(frame-shadow "#595959")
+
+;; Flat background color of the frame between the bevels.
+(frame-bg "#A8A8A8")
+
+;; Highlight edge for "active" elements (focused dialog border, etc.).
+(active-light "#B7D4D5")
+
+;; Shadow edge for active elements.
+(active-shadow "#2F4F50")
+
+;; Foreground color for button icons (close/min/max symbols).
+(btn-fg "#000000")
+
+;; ═══════════════════════════════════════════════════════════════════════
+;;  STATUS BAR COLORS
+;; ═══════════════════════════════════════════════════════════════════════
+;; These colors support 8-digit hex (#RRGGBBAA) for per-pixel alpha
+;; transparency when a 32-bit ARGB visual is available.  With a
+;; 6-digit color the bar is fully opaque.
+
+;; Bar background.  Try "#A8A8A880" for 50 % transparency.
+(bar-bg "#A8A8A8")
+
+;; Bar text color.
+(bar-fg "#FFFFFF")
+
+;; Text color on the currently active workspace button.
+(bar-ws-active "#FFFFFF")
+
+;; Text color on workspace buttons that contain at least one window
+;; but are not currently active.
+(bar-ws-occupied "#303030")
+
+;; Text color on empty (idle) workspace buttons.
+(bar-ws-idle "#606060")
+
+;; Background fill of workspace buttons.
+(bar-ws-bg "#5F9EA0")
+
+;; Highlight edge of the bar's 3D beveled border.
+(bar-border-light "#B7D4D5")
+
+;; Shadow edge of the bar's 3D beveled border.
+(bar-border-shadow "#2F4F50")
+
+;; Bar fill accent color (reserved, currently unused).
+(bar-fill "#5F9EA0")
+
+;; ═══════════════════════════════════════════════════════════════════════
+;;  MENU / DIALOG / FEEDBACK COLORS
+;; ═══════════════════════════════════════════════════════════════════════
+;; menu-bg, iconbar-bg, and dialog-bg support #RRGGBBAA alpha.
+
+;; Background of the root context menu and window menu.
+(menu-bg "#D4D4D4")
+
+;; Background of the icon bar.
+(iconbar-bg "#D4D4D4")
+
+;; Background of confirmation dialogs (Restart, Quit).
+(dialog-bg "#c4c4c4")
+
+;; ═══════════════════════════════════════════════════════════════════════
+;;  FEEDBACK WINDOW COLORS  (move/resize geometry indicator)
+;; ═══════════════════════════════════════════════════════════════════════
+
+(fb-bg "#5F9EA0")
+
+;; Highlight edge of the feedback window bevel.
+(fb-light "#B7D4D5")
+
+;; Shadow edge of the feedback window bevel.
+(fb-shadow "#2F4F50")
+
+;; Text color inside the feedback window (shows dimensions).
+(fb-fg "#FFFFFF")
+
+;; ═══════════════════════════════════════════════════════════════════════
+;;  TOOLTIP
+;; ═══════════════════════════════════════════════════════════════════════
+
+(tooltip-bg "#5F9EA0")
+(tooltip-fg "#FFFFFF")
+(tooltip-border "#2F4F50")
+
+;; Optional separate font for tooltips.  If unset, the main bar font
+;; is used instead.
+;; (tooltip-font "monospace:size=9")
+
+;; ═══════════════════════════════════════════════════════════════════════
+;;  ROOT WINDOW BACKGROUND
+;; ═══════════════════════════════════════════════════════════════════════
+
+;; Three background modes are available:
+
+;; 1. Solid color:
+;;    (root-bg "#303030")
+
+;; 2. Pattern — (root-bg (pattern "name" "color1" "color2" [cell-size]))
+;;    Patterns: checkerboard, diagonal-stripes, horizontal-stripes,
+;;             vertical-stripes, dots, crosshatch, weave
+;;    Optional cell-size overrides the pattern cell size (0 = auto).
+(root-bg (pattern "checkerboard" "#303030" "#404040"))
+
+;; 3. Image — (root-bg (image "/path" placement))
+;;    Placement: centered, scaled, tiled, stretched, scale-filled
+;;    (root-bg (image "/path/to/wallpaper.png" scaled))
+
+;; Second background color (only used by patterns).
+(root-bg2 "#404040")
+
+;; ═══════════════════════════════════════════════════════════════════════
+;;  KEY BINDINGS
+;; ═══════════════════════════════════════════════════════════════════════
+;;
+;;  (bind (mod "modifier") (key "keyname") (action "name") [(arg value)])
+;;
+;;  Modifiers: Alt, Super, Shift, Ctrl — combine with +: "Alt+Shift"
+;;  Keys: a-z, 0-9, Return, Tab, space, Escape, BackSpace, Delete,
+;;        Left, Right, Up, Down, Home, End, Prior, Next, Insert, F1-F12
+;;
+;;  Actions:
+;;    spawn              — run command (arg = "command", or no arg for
+;;                         terminal on first bind, launcher on second)
+;;    killclient         — close the focused window
+;;    focusstack         — focus next/prev in tiling order (arg = +1 or -1)
+;;    cyclewindows      — cycle through all windows (arg = +1 or -1)
+;;    lowerwindow       — lower focused window to bottom of stack
+;;    togglefloat       — toggle floating mode for focused window
+;;    incmaster          — adjust master ratio (arg = float, e.g. ±0.05)
+;;    zoom              — swap focused window into the master area
+;;    togglefullscreen  — toggle fullscreen for focused window
+;;    viewworkspace     — switch to workspace (arg = 1–9)
+;;    movetoworkspace   — move focused window to workspace (arg = 1–9)
+;;    quit              — exit the window manager
+;;    swapbar           — toggle bar visibility
+;;    reloadconfig      — reload this configuration file from disk
+;;    togglecompositing — enable/disable fade animations
+
+(bind (mod Alt) (key Return) (action spawn))                    ;; open terminal
+(bind (mod Alt) (key p) (action spawn))                        ;; open launcher
+(bind (mod Alt) (key j) (action focusstack) (arg +1))          ;; focus next
+(bind (mod Alt) (key k) (action focusstack) (arg -1))          ;; focus prev
+(bind (mod Alt) (key h) (action incmaster) (arg -0.05))        ;; shrink master
+(bind (mod Alt) (key l) (action incmaster) (arg +0.05))        ;; grow master
+(bind (mod Alt+Shift) (key Return) (action zoom))               ;; swap to master
+(bind (mod Alt) (key f) (action togglefullscreen))
+(bind (mod Alt) (key space) (action togglefloat))
+(bind (mod Alt+Shift) (key c) (action killclient))
+(bind (mod Alt+Shift) (key q) (action quit))
+(bind (mod Alt) (key 1) (action viewworkspace) (arg 1))
+(bind (mod Alt) (key 2) (action viewworkspace) (arg 2))
+(bind (mod Alt) (key 3) (action viewworkspace) (arg 3))
+(bind (mod Alt) (key 4) (action viewworkspace) (arg 4))
+(bind (mod Alt) (key 5) (action viewworkspace) (arg 5))
+(bind (mod Alt) (key 6) (action viewworkspace) (arg 6))
+(bind (mod Alt) (key 7) (action viewworkspace) (arg 7))
+(bind (mod Alt) (key 8) (action viewworkspace) (arg 8))
+(bind (mod Alt) (key 9) (action viewworkspace) (arg 9))
+(bind (mod Alt+Shift) (key 1) (action movetoworkspace) (arg 1))
+(bind (mod Alt+Shift) (key 2) (action movetoworkspace) (arg 2))
+(bind (mod Alt+Shift) (key 3) (action movetoworkspace) (arg 3))
+(bind (mod Alt+Shift) (key 4) (action movetoworkspace) (arg 4))
+(bind (mod Alt+Shift) (key 5) (action movetoworkspace) (arg 5))
+(bind (mod Alt+Shift) (key 6) (action movetoworkspace) (arg 6))
+(bind (mod Alt+Shift) (key 7) (action movetoworkspace) (arg 7))
+(bind (mod Alt+Shift) (key 8) (action movetoworkspace) (arg 8))
+(bind (mod Alt+Shift) (key 9) (action movetoworkspace) (arg 9))
+(bind (mod Alt) (key Tab) (action cyclewindows) (arg +1))
+(bind (mod Alt+Shift) (key Tab) (action lowerwindow))
+(bind (mod Alt+Shift) (key b) (action swapbar))
+(bind (mod Alt+Shift) (key o) (action togglecompositing))
+
+;; ═══════════════════════════════════════════════════════════════════════
+;;  ROOT MENU  (right-click on desktop)
+;; ═══════════════════════════════════════════════════════════════════════
+;;
+;;  Each entry is ("label" action) or () for a separator line.
+;;  Actions: new-window, shuffle-up, shuffle-down, refresh, restart, quit
+
+(root-menu
+  ("New Window" new-window)
+  ()
+  ("Shuffle Up" shuffle-up)
+  ("Shuffle Down" shuffle-down)
+  ()
+  ("Refresh" refresh)
+  ("Restart" restart)
+  ("Quit" quit))
