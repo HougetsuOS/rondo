@@ -62,11 +62,13 @@
 ;;   cpu    — CPU usage percentage
 ;;   net    — network interface status
 ;;   temp   — CPU temperature
+;;   layout — current layout indicator (M=master-stack, T=tree)
 ;;
 ;; Align: left or right
 (bar-layout
-  (ws    left)
-  (title right)
+  (ws     left)
+  (layout left)
+  (title  right)
   (bat   right)
   (vol   right)
   (cpu   right)
@@ -310,6 +312,8 @@
 ;;    movetoworkspace   — move focused window to workspace (arg = 1–9)
 ;;    quit              — exit the window manager
 ;;    swapbar           — toggle bar visibility
+;;    setlayout         — set layout (arg = 0 for master-stack, 1 for binary tree)
+;;    cyclelayout       — cycle between available layouts
 ;;    reloadconfig      — reload this configuration file from disk
 ;;    togglecompositing — enable/disable fade animations
 
@@ -345,6 +349,7 @@
 (bind (mod Alt) (key Tab) (action cyclewindows) (arg +1))
 (bind (mod Alt+Shift) (key Tab) (action lowerwindow))
 (bind (mod Alt+Shift) (key b) (action swapbar))
+(bind (mod Alt+Shift) (key t) (action cyclelayout))
 (bind (mod Alt+Shift) (key o) (action togglecompositing))
 
 ;; ═══════════════════════════════════════════════════════════════════════

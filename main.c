@@ -23,6 +23,7 @@ Client *focused  = NULL;
 
 int curws = 0;
 float mfact;
+int cur_layout = LAYOUT_MASTER_STACK;
 
 Monitor mon;
 
@@ -554,6 +555,8 @@ void cleanup(void) {
     /* Unmanage all clients first — unmanage() calls updateiconbar()
      * and drawbar() which need barwin and iconbar to still exist */
     while (clients) unmanage(clients, 0);
+
+    btree_cleanup();
 
     XftDrawDestroy(xftdraw);
     XftDrawDestroy(iconbar_draw);

@@ -186,6 +186,10 @@ static int widget_text(BarWidgetType type, char *buf, int buflen, int max_width)
         snprintf(buf, buflen, " %s %c ", iface, up ? '^' : 'V');
         return (int)strlen(buf);
     }
+    case BAR_WIDGET_LAYOUT: {
+        snprintf(buf, buflen, " %c ", cur_layout == LAYOUT_BINARY_TREE ? 'T' : 'M');
+        return (int)strlen(buf);
+    }
     case BAR_WIDGET_TEMP: {
         if (max_width) { snprintf(buf, buflen, " 999C "); return (int)strlen(buf); }
         FILE *f = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
@@ -399,6 +403,7 @@ static int draw_bar_widget(BarWidgetType type, int x, int btn_y, int btn_sz,
         return w;
     }
 
+    case BAR_WIDGET_LAYOUT: /* fallthrough */
     case BAR_WIDGET_CLOCK: /* fallthrough */
     case BAR_WIDGET_LOAD: /* fallthrough */
     case BAR_WIDGET_MEM: /* fallthrough */

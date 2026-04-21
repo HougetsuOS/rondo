@@ -537,6 +537,8 @@ static const ActionEntry action_table[] = {
     { "swapbar",         swapbar },
     { "reloadconfig",    reloadconfig },
     { "togglecompositing", togglecompositing },
+    { "setlayout",       setlayout },
+    { "cyclelayout",      cyclelayout },
 };
 #define NUM_ACTIONS ((int)(sizeof(action_table) / sizeof(action_table[0])))
 
@@ -853,6 +855,7 @@ static void cfg_apply_form(CfgNode *form) {
             BarWidget *bw = &cfg_bar_widgets[cfg_num_bar_widgets];
             if (strcmp(wtype, "ws")    == 0) bw->type = BAR_WIDGET_WS;
             else if (strcmp(wtype, "title") == 0) bw->type = BAR_WIDGET_TITLE;
+            else if (strcmp(wtype, "layout") == 0) bw->type = BAR_WIDGET_LAYOUT;
             else if (strcmp(wtype, "clock") == 0) bw->type = BAR_WIDGET_CLOCK;
             else if (strcmp(wtype, "load")  == 0) bw->type = BAR_WIDGET_LOAD;
             else if (strcmp(wtype, "mem")   == 0) bw->type = BAR_WIDGET_MEM;
@@ -916,9 +919,6 @@ static void cfg_apply_form(CfgNode *form) {
             CfgNode *av = cfg_list_nth(arg_node->u.list.tail, 0);
             if (av) {
                 if (av->type == CFG_INT) {
-                    /* WmArg is a union — only set the field the action will
-                     * use.  Setting multiple fields overwrites the same memory,
-                     * and setting .v=NULL would zero the entire union. */
                     k.arg.ui = (unsigned int)av->u.ival;
                 } else if (av->type == CFG_FLOAT) {
                     k.arg.f = (float)av->u.fval;
@@ -928,13 +928,13 @@ static void cfg_apply_form(CfgNode *form) {
                     /* special: "terminal" or "launcher" for spawn */
                     k.arg.v = NULL;
                 } else {
-                    k.arg.ui = 0;
+                    k.arg.v = NULL;
                 }
             } else {
-                k.arg.ui = 0;
+                k.arg.v = NULL;
             }
         } else {
-            k.arg.ui = 0;
+            k.arg.v = NULL;
         }
 
         /* append to keys array */
@@ -1040,6 +1040,7 @@ static void cfg_set_defaults(void) {
     /* bar widget layout */
     static BarWidget default_bar_widgets[] = {
         { BAR_WIDGET_WS,     BAR_ALIGN_LEFT },
+        { BAR_WIDGET_LAYOUT, BAR_ALIGN_LEFT },
         { BAR_WIDGET_TITLE,  BAR_ALIGN_RIGHT },
         { BAR_WIDGET_BAT,    BAR_ALIGN_RIGHT },
         { BAR_WIDGET_VOL,    BAR_ALIGN_RIGHT },

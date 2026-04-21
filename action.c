@@ -101,6 +101,7 @@ void togglefloat(const WmArg *arg) {
     }
 
     if (!focused->is_floating) {
+        btree_remove(focused);
         focused->oldx = focused->x;
         focused->oldy = focused->y;
         focused->oldw = focused->w;
@@ -129,6 +130,7 @@ void togglefloat(const WmArg *arg) {
         XRaiseWindow(dpy, XtWindow(focused->frame_shell));
     } else {
         focused->is_floating = 0;
+        btree_add(focused);
     }
     arrange();
     drawbar();
@@ -252,7 +254,11 @@ void movetoworkspace(const WmArg *arg) {
     unsigned int ws = arg->ui - 1;  /* config uses 1-indexed, internal is 0-indexed */
     if (!focused || ws == (unsigned)focused->ws) return;
 
+    int was_floating = focused->is_floating;
+    btree_remove(focused);
     focused->ws = ws;
+    if (!was_floating)
+        btree_add(focused);
     focused->is_hidden = 1;
     set_wm_state(focused, IconicState);
     fade_window_out(focused, move_hide_cb);
@@ -285,4 +291,18 @@ void swapbar(const WmArg *arg) {
         XUnmapWindow(dpy, barwin);
     }
     updateiconbar();
+}
+
+void setlayout(const WmArg *arg) {
+    cur_layout = arg->i;
+    arrange();
+    drawbar();
+}
+
+void cyclelayout(const WmArg *arg) {
+    (void)arg;
+    cur_layout = (cur_layout == LAYOUT_MASTER_STACK) ? LAYOUT_BINARY_TREE
+                                                     : LAYOUT_MASTER_STACK;
+    arrange();
+    drawbar();
 }

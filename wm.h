@@ -112,6 +112,7 @@ struct Client {
     unsigned int opacity;         /* current opacity 0..0xFFFFFFFF */
     XtIntervalId fade_timer;      /* active timer ID, 0 if none */
     void (*fade_done_cb)(Client *); /* called when fade-out completes */
+    void *btree_node;       /* binary tree leaf node (BTreeNode*, or NULL) */
     Client *next;
 };
 
@@ -145,6 +146,11 @@ extern Client *focused;
 
 extern int curws;
 extern float mfact;
+extern int cur_layout;
+
+/* Layout types */
+#define LAYOUT_MASTER_STACK 0
+#define LAYOUT_BINARY_TREE  1
 
 extern Monitor mon;
 
@@ -344,6 +350,9 @@ void update_workarea(void);
 
 /* layout.c */
 void arrange(void);
+void btree_add(Client *c);
+void btree_remove(Client *c);
+void btree_cleanup(void);
 
 /* action.c */
 void spawn(const WmArg *arg);
@@ -351,6 +360,8 @@ void killclient(const WmArg *arg);
 void focusstack(const WmArg *arg);
 void cyclewindows(const WmArg *arg);
 void lowerwindow(const WmArg *arg);
+void setlayout(const WmArg *arg);
+void cyclelayout(const WmArg *arg);
 void togglefloat(const WmArg *arg);
 void incmaster(const WmArg *arg);
 void zoom(const WmArg *arg);

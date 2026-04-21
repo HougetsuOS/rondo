@@ -176,6 +176,7 @@ static void minimize_do_unmap(Client *c) {
 void minimize_client(Client *c) {
     if (!c || c->is_minimized) return;
     c->is_minimized = 1;
+    btree_remove(c);
     set_wm_state(c, IconicState);
     fade_window_out(c, minimize_do_unmap);
 }
@@ -183,6 +184,8 @@ void minimize_client(Client *c) {
 void restore_client(Client *c) {
     if (!c || !c->is_minimized) return;
     c->is_minimized = 0;
+    if (!c->is_floating && !c->is_hidden)
+        btree_add(c);
     set_wm_state(c, NormalState);
     XtMapWidget(c->frame_shell);
     fade_window_in(c);
@@ -499,6 +502,8 @@ void manage(Window w, XWindowAttributes *wa) {
             moveresizeframe(c);
             send_configure_notify(c);
         }
+        if (!c->is_floating)
+            btree_add(c);
         arrange();
         updateframe(c);
         drawbar();
@@ -515,6 +520,7 @@ void unmanage_destroyed_cb(Client *c) {
         c->fade_timer = (XtIntervalId)0;
     }
     compositor_untrack_window(XtWindow(c->frame_shell));
+    btree_remove(c);
     /* Destroy frame draw context and widgets */
     if (c->frame_draw) {
         XftDrawDestroy(c->frame_draw);
@@ -535,6 +541,8 @@ void unmanage(Client *c, int destroyed) {
     }
     /* untrack frame_shell from compositor */
     compositor_untrack_window(XtWindow(c->frame_shell));
+    /* remove from btree layout */
+    btree_remove(c);
     /* Remove from client list first */
     if (clients == c) {
         clients = c->next;
