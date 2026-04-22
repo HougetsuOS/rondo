@@ -298,6 +298,7 @@ int is_vertical(BarPosition p);
 void drawbar(void);
 void start_bar_timer(void);
 void handle_bar_click(int x, int y);
+void handle_bar_scroll(int x, int y, int button);
 int iconbar_visible(void);
 int icon_entry_h(void);
 int minimized_count(void);

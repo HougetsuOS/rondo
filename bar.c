@@ -326,6 +326,10 @@ static void drawiconbar_horizontal(void);
 /* Allocated width for the expanding title widget (set by drawbar layout pass). */
 static int title_alloc_w = 0;
 
+/* Volume widget hit-test region (set during draw, used for scroll events). */
+static int vol_widget_x = -1, vol_widget_y = -1;
+static int vol_widget_w = 0, vol_widget_h = 0;
+
 /* Helper: measure and draw a single bar widget.
  * Returns the width the widget occupies.
  * If draw is false, only measures (no drawing).
@@ -435,6 +439,13 @@ static int draw_bar_widget(BarWidgetType type, int x, int btn_y, int btn_sz,
             XftDrawStringUtf8(xftdraw, &col_bar_fg, xftfont,
                                text_x, text_y,
                                (XftChar8 *)text, len);
+        }
+        /* record volume widget hit-test region */
+        if (type == BAR_WIDGET_VOL) {
+            vol_widget_x = x;
+            vol_widget_y = btn_y;
+            vol_widget_w = w;
+            vol_widget_h = btn_sz;
         }
         return w;
     }
@@ -691,6 +702,23 @@ static void drawbar_vertical(void) {
             }
             widget_y_cursor += max_h[bi];
         }
+        /* record volume widget hit-test region for vertical bar */
+        vol_widget_x = -1; vol_widget_w = 0;
+        vol_widget_y = text_y_start;
+        vol_widget_h = (bar_h - bw - 4) - text_y_start;
+        for (int bi = 0; bi < n_bottom; bi++) {
+            if (bottom_widgets[bi] == BAR_WIDGET_VOL) {
+                /* find the y range for just the volume widget */
+                int vy = text_y_start;
+                for (int bj = 0; bj < bi; bj++)
+                    vy += max_h[bj];
+                vol_widget_y = vy;
+                vol_widget_h = max_h[bi];
+                vol_widget_x = interior_left;
+                vol_widget_w = interior_w;
+                break;
+            }
+        }
     }
 
     /* title: vertical text in the middle area */
@@ -744,6 +772,38 @@ void handle_bar_click(int x, int y) {
                 return;
             }
         }
+    }
+}
+
+/* One-shot timer callback: redraw bar after volume change. */
+static void vol_redraw_cb(XtPointer data, XtIntervalId *id) {
+    (void)data; (void)id;
+    drawbar();
+}
+
+/* Adjust volume by delta percent using pactl. Positive = up, negative = down. */
+static void volume_change(int delta) {
+    const char *cmd = delta > 0
+        ? "pactl set-sink-volume @DEFAULT_SINK@ +5% 2>/dev/null"
+        : "pactl set-sink-volume @DEFAULT_SINK@ -5% 2>/dev/null";
+    if (fork() == 0) {
+        if (dpy) close(ConnectionNumber(dpy));
+        setsid();
+        execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+        _exit(127);
+    }
+    /* redraw bar after a short delay to reflect new volume */
+    XtAppAddTimeOut(app, 30, vol_redraw_cb, NULL);
+}
+
+/* Handle scroll wheel on the status bar.
+ * Button4 = scroll up, Button5 = scroll down.
+ * Currently only the volume widget responds to scroll. */
+void handle_bar_scroll(int x, int y, int button) {
+    if (vol_widget_w <= 0) return;  /* no volume widget */
+    if (x >= vol_widget_x && x < vol_widget_x + vol_widget_w &&
+        y >= vol_widget_y && y < vol_widget_y + vol_widget_h) {
+        volume_change(button == Button4 ? 1 : -1);
     }
 }
 

@@ -284,7 +284,10 @@ void run(void) {
                     break;
                 }
                 if (ev.xbutton.window == barwin) {
-                    handle_bar_click(ev.xbutton.x, ev.xbutton.y);
+                    if (ev.xbutton.button == Button4 || ev.xbutton.button == Button5)
+                        handle_bar_scroll(ev.xbutton.x, ev.xbutton.y, ev.xbutton.button);
+                    else
+                        handle_bar_click(ev.xbutton.x, ev.xbutton.y);
                     break;
                 }
                 if (handle_buttonpress(&ev.xbutton)) {

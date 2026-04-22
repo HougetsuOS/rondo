@@ -948,7 +948,7 @@ static int ipc_send(const char *cmd)
 
 static XtAppContext app;
 static Widget toplevel, main_form, section_rc, section_sw, scroll_win;
-static Widget panels[6]; /* 0=Dimensions,1=Bar,2=Appearance,3=Programs,4=Compositing,5=Background */
+static Widget panels[7]; /* 0=Dimensions,1=Bar,2=Appearance,3=Programs,4=Compositing,5=Background,6=Keybindings */
 static int current_panel = 0;
 
 /* widget handles for reading back values */
@@ -965,11 +965,22 @@ typedef struct { Widget text; Widget preview; const char *key; char *value; } Co
 static ColorWidget color_widgets[30];
 static int num_color_widgets = 0;
 
+/* keybindings panel */
+static Widget w_bind_list;       /* XmList showing current bindings */
+static Widget w_bind_add_btn, w_bind_edit_btn, w_bind_remove_btn;
+
 static void show_panel(int which) {
-    for (int i = 0; i < 6; i++)
+    for (int i = 0; i < 7; i++)
         XtUnmanageChild(panels[i]);
-    XmScrolledWindowSetAreas(scroll_win, NULL, NULL, panels[which]);
-    XtManageChild(panels[which]);
+    if (which == 6) {
+        /* keybindings panel lives directly in main_form, not in scroll_win */
+        XtUnmanageChild(scroll_win);
+        XtManageChild(panels[6]);
+    } else {
+        XtManageChild(scroll_win);
+        XmScrolledWindowSetAreas(scroll_win, NULL, NULL, panels[which]);
+        XtManageChild(panels[which]);
+    }
     current_panel = which;
 }
 
@@ -1576,7 +1587,230 @@ static void create_background_panel(Widget parent) {
     XtUnmanageChild(p);
 }
 
-/* ── read back GUI state into cfg ──────────────────────────────────── */
+/* ── Keybindings panel ─────────────────────────────────────────────────── */
+
+/* Available action names (must match rondo's action_table in config.c) */
+static const char *action_names[] = {
+    "spawn","killclient","focusstack","cyclewindows","lowerwindow",
+    "togglefloat","incmaster","zoom","togglefullscreen",
+    "viewworkspace","movetoworkspace","quit","swapbar",
+    "setlayout","cyclelayout","reloadconfig","togglecompositing"
+};
+#define NUM_ACTION_NAMES ((int)(sizeof(action_names)/sizeof(action_names[0])))
+
+/* Rebuild the XmList from the binds[] array. */
+static void refresh_bind_list(void) {
+    if (!w_bind_list) return;
+    XmListDeleteAllItems(w_bind_list);
+    for (int i = 0; i < num_binds; i++) {
+        char line[512];
+        if (binds[i].arg[0])
+            snprintf(line, sizeof(line), "%s+%s  →  %s %s",
+                     binds[i].mod, binds[i].key, binds[i].action, binds[i].arg);
+        else
+            snprintf(line, sizeof(line), "%s+%s  →  %s",
+                     binds[i].mod, binds[i].key, binds[i].action);
+        XmString xms = XmStringCreateLocalized(line);
+        XmListAddItem(w_bind_list, xms, i + 1);
+        XmStringFree(xms);
+    }
+}
+
+/* Callback data for the bind edit dialog */
+typedef struct {
+    Widget dlg, mod_om, key_text, act_om, arg_text;
+    int edit_idx;
+} DlgData;
+
+static void bind_ok_cb(Widget w, XtPointer cd, XtPointer cbs) {
+    (void)w; (void)cbs;
+    DlgData *d = (DlgData *)cd;
+    char *key = XmTextGetString(d->key_text);
+    char *arg = XmTextGetString(d->arg_text);
+    int mi = option_menu_index(d->mod_om);
+    int ai = option_menu_index(d->act_om);
+
+    if (!key || !key[0]) { XtFree(key); XtFree(arg); free(d); return; }
+
+    static char *mod_opts[] = {"Alt","Alt+Shift","Super","Ctrl","Ctrl+Alt","Shift"};
+
+    BindEntry b;
+    strncpy(b.mod, mod_opts[mi < 6 ? mi : 0], sizeof(b.mod)-1); b.mod[sizeof(b.mod)-1]='\0';
+    strncpy(b.key, key, sizeof(b.key)-1); b.key[sizeof(b.key)-1]='\0';
+    strncpy(b.action, action_names[ai < NUM_ACTION_NAMES ? ai : 0], sizeof(b.action)-1); b.action[sizeof(b.action)-1]='\0';
+    strncpy(b.arg, arg ? arg : "", sizeof(b.arg)-1); b.arg[sizeof(b.arg)-1]='\0';
+    XtFree(key); XtFree(arg);
+
+    if (d->edit_idx >= 0 && d->edit_idx < num_binds) {
+        binds[d->edit_idx] = b;
+    } else {
+        if (num_binds < 128)
+            binds[num_binds++] = b;
+    }
+    refresh_bind_list();
+    free(d);
+}
+
+static void bind_cancel_cb(Widget w, XtPointer cd, XtPointer cbs) {
+    (void)w; (void)cbs; free(cd);
+}
+
+static void bind_dialog(Widget parent, int edit_idx) {
+    Widget dlg = XmCreateMessageDialog(
+        parent, edit_idx >= 0 ? "Edit Binding" : "Add Binding", NULL, 0);
+    /* remove default cancel/help */
+    XtUnmanageChild(XmMessageBoxGetChild(dlg, XmDIALOG_CANCEL_BUTTON));
+    XtUnmanageChild(XmMessageBoxGetChild(dlg, XmDIALOG_HELP_BUTTON));
+
+    Widget form = XtVaCreateManagedWidget("bform", xmFormWidgetClass, dlg, NULL);
+
+    /* Modifier */
+    Widget mod_lbl = XtVaCreateManagedWidget("Modifier:", xmLabelWidgetClass, form,
+        XmNtopAttachment, XmATTACH_FORM, XmNtopOffset, 8,
+        XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 8, NULL);
+    static char *mod_opts[] = {"Alt","Alt+Shift","Super","Ctrl","Ctrl+Alt","Shift"};
+    Widget mod_om = make_option_menu(form, "mod", mod_opts, 6, 0);
+    XtVaSetValues(mod_om,
+        XmNtopAttachment, XmATTACH_FORM, XmNtopOffset, 4,
+        XmNleftAttachment, XmATTACH_WIDGET, XmNleftWidget, mod_lbl,
+        XmNleftOffset, 4,
+        XmNrightAttachment, XmATTACH_FORM, XmNrightOffset, 8,
+        XmNmarginWidth, 2, XmNmarginHeight, 2, NULL);
+
+    /* Key */
+    Widget key_lbl = XtVaCreateManagedWidget("Key:", xmLabelWidgetClass, form,
+        XmNtopAttachment, XmATTACH_WIDGET, XmNtopWidget, mod_om, XmNtopOffset, 12,
+        XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 8, NULL);
+    Widget key_text = XtVaCreateManagedWidget("key", xmTextWidgetClass, form,
+        XmNtopAttachment, XmATTACH_WIDGET, XmNtopWidget, mod_om, XmNtopOffset, 8,
+        XmNleftAttachment, XmATTACH_WIDGET, XmNleftWidget, key_lbl,
+        XmNleftOffset, 4,
+        XmNrightAttachment, XmATTACH_FORM, XmNrightOffset, 8,
+        XmNeditMode, XmSINGLE_LINE_EDIT,
+        XmNmaxLength, 63, NULL);
+
+    /* Action */
+    Widget act_lbl = XtVaCreateManagedWidget("Action:", xmLabelWidgetClass, form,
+        XmNtopAttachment, XmATTACH_WIDGET, XmNtopWidget, key_text, XmNtopOffset, 12,
+        XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 8, NULL);
+    Widget act_om = make_option_menu(form, "act",
+        (char **)action_names, NUM_ACTION_NAMES, 0);
+    XtVaSetValues(act_om,
+        XmNtopAttachment, XmATTACH_WIDGET, XmNtopWidget, key_text, XmNtopOffset, 8,
+        XmNleftAttachment, XmATTACH_WIDGET, XmNleftWidget, act_lbl,
+        XmNleftOffset, 4,
+        XmNrightAttachment, XmATTACH_FORM, XmNrightOffset, 8,
+        XmNmarginWidth, 2, XmNmarginHeight, 2, NULL);
+
+    /* Arg */
+    Widget arg_lbl = XtVaCreateManagedWidget("Arg:", xmLabelWidgetClass, form,
+        XmNtopAttachment, XmATTACH_WIDGET, XmNtopWidget, act_om, XmNtopOffset, 12,
+        XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 8, NULL);
+    Widget arg_text = XtVaCreateManagedWidget("arg", xmTextWidgetClass, form,
+        XmNtopAttachment, XmATTACH_WIDGET, XmNtopWidget, act_om, XmNtopOffset, 8,
+        XmNleftAttachment, XmATTACH_WIDGET, XmNleftWidget, arg_lbl,
+        XmNleftOffset, 4,
+        XmNrightAttachment, XmATTACH_FORM, XmNrightOffset, 8,
+        XmNeditMode, XmSINGLE_LINE_EDIT,
+        XmNmaxLength, 127, NULL);
+
+    /* pre-fill if editing */
+    if (edit_idx >= 0 && edit_idx < num_binds) {
+        XmTextSetString(key_text, binds[edit_idx].key);
+        XmTextSetString(arg_text, binds[edit_idx].arg);
+        for (int mi = 0; mi < 6; mi++) {
+            if (strcmp(binds[edit_idx].mod, mod_opts[mi]) == 0) {
+                set_option_menu_idx(mod_om, mi);
+                break;
+            }
+        }
+        for (int ai = 0; ai < NUM_ACTION_NAMES; ai++) {
+            if (strcmp(binds[edit_idx].action, action_names[ai]) == 0) {
+                set_option_menu_idx(act_om, ai);
+                break;
+            }
+        }
+    }
+
+    DlgData *dd = malloc(sizeof(DlgData));
+    dd->dlg = dlg; dd->mod_om = mod_om; dd->key_text = key_text;
+    dd->act_om = act_om; dd->arg_text = arg_text; dd->edit_idx = edit_idx;
+
+    Widget ok_btn = XmMessageBoxGetChild(dlg, XmDIALOG_OK_BUTTON);
+    XtAddCallback(ok_btn, XmNactivateCallback, bind_ok_cb, (XtPointer)dd);
+    XtAddCallback(dlg, XmNcancelCallback, bind_cancel_cb, (XtPointer)dd);
+
+    XtManageChild(dlg);
+}
+
+static void bind_add_cb(Widget w, XtPointer cd, XtPointer cbs) {
+    (void)w; (void)cd; (void)cbs;
+    bind_dialog(w, -1);
+}
+
+static void bind_edit_cb(Widget w, XtPointer cd, XtPointer cbs) {
+    (void)w; (void)cd; (void)cbs;
+    int *sel = NULL, nsel = 0;
+    if (!XmListGetSelectedPos(w_bind_list, &sel, &nsel) || nsel < 1) return;
+    int idx = sel[0] - 1;
+    XtFree((char *)sel);
+    if (idx >= 0 && idx < num_binds)
+        bind_dialog(w, idx);
+}
+
+static void bind_remove_cb(Widget w, XtPointer cd, XtPointer cbs) {
+    (void)w; (void)cd; (void)cbs;
+    int *sel = NULL, nsel = 0;
+    if (!XmListGetSelectedPos(w_bind_list, &sel, &nsel) || nsel < 1) return;
+    int idx = sel[0] - 1;
+    XtFree((char *)sel);
+    if (idx < 0 || idx >= num_binds) return;
+    for (int i = idx; i < num_binds - 1; i++)
+        binds[i] = binds[i + 1];
+    num_binds--;
+    refresh_bind_list();
+}
+
+static void create_keybindings_panel(Widget parent, Widget sep, Widget btn_row) {
+    /* This panel lives directly in main_form (not inside scroll_win)
+     * so the list can stretch to fill the window. */
+    Widget p = XtVaCreateWidget("panel", xmFormWidgetClass, parent,
+        XmNtopAttachment, XmATTACH_WIDGET, XmNtopWidget, sep,
+        XmNbottomAttachment, XmATTACH_WIDGET, XmNbottomWidget, btn_row,
+        XmNleftAttachment, XmATTACH_FORM, XmNrightAttachment, XmATTACH_FORM,
+        NULL);
+    panels[6] = p;
+
+    /* Button row at bottom */
+    Widget kbtn_row = XtVaCreateManagedWidget("btns", xmRowColumnWidgetClass, p,
+        XmNorientation, XmHORIZONTAL, XmNpacking, XmPACK_TIGHT,
+        XmNbottomAttachment, XmATTACH_FORM, XmNbottomOffset, 4,
+        XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 4,
+        XmNrightAttachment, XmATTACH_FORM, XmNrightOffset, 4,
+        NULL);
+    w_bind_add_btn = XtVaCreateManagedWidget("Add", xmPushButtonWidgetClass, kbtn_row, NULL);
+    w_bind_edit_btn = XtVaCreateManagedWidget("Edit", xmPushButtonWidgetClass, kbtn_row, NULL);
+    w_bind_remove_btn = XtVaCreateManagedWidget("Remove", xmPushButtonWidgetClass, kbtn_row, NULL);
+    XtAddCallback(w_bind_add_btn, XmNactivateCallback, bind_add_cb, NULL);
+    XtAddCallback(w_bind_edit_btn, XmNactivateCallback, bind_edit_cb, NULL);
+    XtAddCallback(w_bind_remove_btn, XmNactivateCallback, bind_remove_cb, NULL);
+
+    /* Scrolled list fills remaining space above buttons */
+    Arg list_args[2]; int list_n = 0;
+    XtSetArg(list_args[list_n], XmNvisibleItemCount, 15); list_n++;
+    XtSetArg(list_args[list_n], XmNselectionPolicy, XmSINGLE_SELECT); list_n++;
+    w_bind_list = XmCreateScrolledList(p, "bind_list", list_args, list_n);
+    XtVaSetValues(XtParent(w_bind_list),
+        XmNtopAttachment, XmATTACH_FORM, XmNtopOffset, 4,
+        XmNbottomAttachment, XmATTACH_WIDGET, XmNbottomWidget, kbtn_row, XmNbottomOffset, 4,
+        XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 4,
+        XmNrightAttachment, XmATTACH_FORM, XmNrightOffset, 4,
+        NULL);
+    XtManageChild(w_bind_list);
+
+    refresh_bind_list();
+    XtUnmanageChild(p);
+}
 
 static int scale_val(Widget w) { int v=0; XtVaGetValues(w, XmNvalue, &v, NULL); return v; }
 
@@ -1764,8 +1998,8 @@ int main(int argc, char *argv[]) {
             XmNradioAlwaysOne, True,
             NULL);
 
-        const char *section_names[] = {"Dimensions","Bar","Appearance","Programs","Compositing","Background"};
-        for (int i = 0; i < 6; i++) {
+        const char *section_names[] = {"Dimensions","Bar","Appearance","Programs","Compositing","Background","Keybindings"};
+        for (int i = 0; i < 7; i++) {
             Widget btn = XtVaCreateManagedWidget(section_names[i],
                 xmPushButtonWidgetClass, section_rc, NULL);
             XtAddCallback(btn, XmNactivateCallback, section_cb, (XtPointer)(intptr_t)i);
@@ -1821,6 +2055,7 @@ int main(int argc, char *argv[]) {
     create_programs_panel(scroll_win);
     create_compositing_panel(scroll_win);
     create_background_panel(scroll_win);
+    create_keybindings_panel(main_form, sep, btn_row);
 
     show_panel(0);
     XtRealizeWidget(toplevel);
