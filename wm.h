@@ -375,6 +375,8 @@ void zoom(const WmArg *arg);
 void togglefullscreen(const WmArg *arg);
 void viewworkspace(const WmArg *arg);
 void movetoworkspace(const WmArg *arg);
+void viewwsrel(const WmArg *arg);
+void movetowsrel(const WmArg *arg);
 void quit(const WmArg *arg);
 void swapbar(const WmArg *arg);
 void reloadconfig(const WmArg *arg);

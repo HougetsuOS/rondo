@@ -388,3 +388,22 @@ void cyclelayout(const WmArg *arg) {
     arrange();
     drawbar();
 }
+
+void viewwsrel(const WmArg *arg) {
+    int ws = curws + arg->i;
+    if (ws < 0) ws = NUM_WORKSPACES - 1;
+    if (ws >= NUM_WORKSPACES) ws = 0;
+    WmArg a = { .ui = (unsigned)(ws + 1) };
+    viewworkspace(&a);
+}
+
+void movetowsrel(const WmArg *arg) {
+    if (!focused) return;
+    int ws = focused->ws + arg->i;
+    if (ws < 0) ws = NUM_WORKSPACES - 1;
+    if (ws >= NUM_WORKSPACES) ws = 0;
+    if (ws == focused->ws) return;
+    WmArg a = { .ui = (unsigned)(ws + 1) };
+    movetoworkspace(&a);
+    viewworkspace(&a);
+}

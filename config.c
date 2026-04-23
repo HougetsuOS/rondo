@@ -501,6 +501,8 @@ static KeySym parse_keysym(const char *s) {
     if (strcmp(s, "Prior")   == 0) return XK_Prior;
     if (strcmp(s, "Next")    == 0) return XK_Next;
     if (strcmp(s, "Insert")  == 0) return XK_Insert;
+    if (strcmp(s, "comma")   == 0) return XK_comma;
+    if (strcmp(s, "period")  == 0) return XK_period;
     /* F1-F12 */
     if (s[0] == 'F') {
         int n = atoi(s + 1);
@@ -533,6 +535,8 @@ static const ActionEntry action_table[] = {
     { "togglefullscreen",togglefullscreen },
     { "viewworkspace",   viewworkspace },
     { "movetoworkspace", movetoworkspace },
+    { "viewwsrel",        viewwsrel },
+    { "movetowsrel",      movetowsrel },
     { "quit",            quit },
     { "swapbar",         swapbar },
     { "reloadconfig",    reloadconfig },
@@ -1031,10 +1035,14 @@ static void cfg_set_defaults(void) {
         { Mod1Mask,            XK_Down,       focusdir,          { .i = EDGE_S } },
         { Mod1Mask,            XK_Left,       focusdir,          { .i = EDGE_W } },
         { Mod1Mask,            XK_Right,      focusdir,          { .i = EDGE_E } },
-        { Mod1Mask|ShiftMask,  XK_Up,         swapdir,            { .i = EDGE_N } },
-        { Mod1Mask|ShiftMask,  XK_Down,       swapdir,            { .i = EDGE_S } },
-        { Mod1Mask|ShiftMask,  XK_Left,       swapdir,            { .i = EDGE_W } },
-        { Mod1Mask|ShiftMask,  XK_Right,      swapdir,            { .i = EDGE_E } },
+        { Mod1Mask|ControlMask|ShiftMask, XK_Up,    swapdir,    { .i = EDGE_N } },
+        { Mod1Mask|ControlMask|ShiftMask, XK_Down,  swapdir,    { .i = EDGE_S } },
+        { Mod1Mask|ControlMask|ShiftMask, XK_Left,  swapdir,    { .i = EDGE_W } },
+        { Mod1Mask|ControlMask|ShiftMask, XK_Right, swapdir,    { .i = EDGE_E } },
+        { Mod1Mask|ControlMask, XK_Left,       viewwsrel,        { .i = -1 } },
+        { Mod1Mask|ControlMask, XK_Right,      viewwsrel,        { .i = +1 } },
+        { Mod1Mask|ShiftMask,  XK_Left,       movetowsrel,      { .i = -1 } },
+        { Mod1Mask|ShiftMask,  XK_Right,      movetowsrel,      { .i = +1 } },
     };
 
     /* spawn args for default keys */

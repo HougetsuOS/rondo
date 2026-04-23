@@ -1605,7 +1605,7 @@ static void create_background_panel(Widget parent) {
 static const char *action_names[] = {
     "spawn","killclient","focusstack","cyclewindows","lowerwindow",
     "togglefloat","incmaster","zoom","togglefullscreen",
-    "viewworkspace","movetoworkspace","quit","swapbar",
+    "viewworkspace","movetoworkspace","viewwsrel","movetowsrel","quit","swapbar",
     "setlayout","cyclelayout","focusdir","swapdir","reloadconfig","togglecompositing"
 };
 #define NUM_ACTION_NAMES ((int)(sizeof(action_names)/sizeof(action_names[0])))

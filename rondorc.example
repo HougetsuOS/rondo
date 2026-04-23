@@ -310,6 +310,10 @@
 ;;    togglefullscreen  — toggle fullscreen for focused window
 ;;    viewworkspace     — switch to workspace (arg = 1–9)
 ;;    movetoworkspace   — move focused window to workspace (arg = 1–9)
+;;    viewwsrel         — switch to prev/next workspace (arg = -1 or +1)
+;;    movetowsrel       — move focused window to prev/next workspace (arg = -1 or +1)
+;;    focusdir          — focus window in direction (arg = 1=N, 2=S, 4=W, 8=E)
+;;    swapdir           — swap focused window with neighbor in direction
 ;;    quit              — exit the window manager
 ;;    swapbar           — toggle bar visibility
 ;;    setlayout         — set layout (arg = 0 for master-stack, 1 for binary tree)
@@ -351,6 +355,19 @@
 (bind (mod Alt+Shift) (key b) (action swapbar))
 (bind (mod Alt+Shift) (key t) (action cyclelayout))
 (bind (mod Alt+Shift) (key o) (action togglecompositing))
+;; Arrow key navigation
+(bind (mod Alt) (key Up) (action focusdir) (arg 1))             ;; focus up
+(bind (mod Alt) (key Down) (action focusdir) (arg 2))           ;; focus down
+(bind (mod Alt) (key Left) (action focusdir) (arg 4))           ;; focus left
+(bind (mod Alt) (key Right) (action focusdir) (arg 8))          ;; focus right
+(bind (mod Alt+Ctrl+Shift) (key Up) (action swapdir) (arg 1))    ;; swap up
+(bind (mod Alt+Ctrl+Shift) (key Down) (action swapdir) (arg 2))  ;; swap down
+(bind (mod Alt+Ctrl+Shift) (key Left) (action swapdir) (arg 4))  ;; swap left
+(bind (mod Alt+Ctrl+Shift) (key Right) (action swapdir) (arg 8));; swap right
+(bind (mod Alt+Ctrl) (key Left) (action viewwsrel) (arg -1))   ;; prev workspace
+(bind (mod Alt+Ctrl) (key Right) (action viewwsrel) (arg +1))  ;; next workspace
+(bind (mod Alt+Shift) (key Left) (action movetowsrel) (arg -1));; move to prev ws
+(bind (mod Alt+Shift) (key Right) (action movetowsrel) (arg +1));; move to next ws
 
 ;; ═══════════════════════════════════════════════════════════════════════
 ;;  ROOT MENU  (right-click on desktop)
