@@ -36,6 +36,9 @@
 #include "config.h"
 #include "ipc.h"
 
+#define MIN(a,b) ((a)<(b)?(a):(b))
+#define MAX(a,b) ((a)>(b)?(a):(b))
+
 /* ── constants ───────────────────────────────────────────────────────── */
 
 /* Button identifiers for hit-testing */
@@ -353,6 +356,7 @@ void update_workarea(void);
 void arrange(void);
 void btree_add(Client *c);
 void btree_remove(Client *c);
+void btree_swap(Client *a, Client *b);
 void btree_cleanup(void);
 
 /* action.c */
@@ -363,6 +367,8 @@ void cyclewindows(const WmArg *arg);
 void lowerwindow(const WmArg *arg);
 void setlayout(const WmArg *arg);
 void cyclelayout(const WmArg *arg);
+void focusdir(const WmArg *arg);
+void swapdir(const WmArg *arg);
 void togglefloat(const WmArg *arg);
 void incmaster(const WmArg *arg);
 void zoom(const WmArg *arg);

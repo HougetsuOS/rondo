@@ -89,6 +89,88 @@ void lowerwindow(const WmArg *arg) {
     XLowerWindow(dpy, focused->frame_shell ? XtWindow(focused->frame_shell) : focused->win);
 }
 
+static Client *find_client_dir(int dir) {
+    if (!focused || focused->ws != curws) return NULL;
+    int fx = focused->x, fy = focused->y;
+    int fw = focused->w, fh = focused->h;
+    Client *best = NULL;
+    int best_dist = INT_MAX;
+    int best_overlap = -1;
+
+    for (Client *c = clients; c; c = c->next) {
+        if (c == focused || c->ws != curws || c->is_floating ||
+            c->is_minimized || c->is_hidden) continue;
+        int ok = 0, dist = 0, overlap = 0;
+
+        if (dir == EDGE_N && c->y + c->h <= fy) {
+            ok = 1; dist = fy - (c->y + c->h);
+            overlap = MIN(fx + fw, c->x + c->w) - MAX(fx, c->x);
+        } else if (dir == EDGE_S && c->y >= fy + fh) {
+            ok = 1; dist = c->y - (fy + fh);
+            overlap = MIN(fx + fw, c->x + c->w) - MAX(fx, c->x);
+        } else if (dir == EDGE_W && c->x + c->w <= fx) {
+            ok = 1; dist = fx - (c->x + c->w);
+            overlap = MIN(fy + fh, c->y + c->h) - MAX(fy, c->y);
+        } else if (dir == EDGE_E && c->x >= fx + fw) {
+            ok = 1; dist = c->x - (fx + fw);
+            overlap = MIN(fy + fh, c->y + c->h) - MAX(fy, c->y);
+        }
+        if (!ok) continue;
+        if (overlap > best_overlap || (overlap == best_overlap && dist < best_dist)) {
+            best_dist = dist;
+            best_overlap = overlap;
+            best = c;
+        }
+    }
+    return best;
+}
+
+void focusdir(const WmArg *arg) {
+    Client *c = find_client_dir(arg->i);
+    if (c) focus(c);
+}
+
+void swapdir(const WmArg *arg) {
+    if (!focused || focused->is_floating || focused->ws != curws) return;
+    Client *c = find_client_dir(arg->i);
+    if (!c || c->is_floating) return;
+
+    if (cur_layout == LAYOUT_BINARY_TREE) {
+        btree_swap(focused, c);
+    } else {
+        /* swap positions in the linked list */
+        Client *a = focused, *b = c;
+        Client *ap = NULL, *bp = NULL;
+        for (Client *p = clients; p; p = p->next) {
+            if (p->next == a) ap = p;
+            if (p->next == b) bp = p;
+        }
+        if (a->next == b) {
+            /* a is immediately before b */
+            if (ap) ap->next = b; else clients = b;
+            a->next = b->next;
+            b->next = a;
+        } else if (b->next == a) {
+            /* b is immediately before a */
+            if (bp) bp->next = a; else clients = a;
+            b->next = a->next;
+            a->next = b;
+        } else {
+            /* non-adjacent */
+            if (ap) ap->next = b; else clients = b;
+            if (bp) bp->next = a; else clients = a;
+            Client *tmp = a->next;
+            a->next = b->next;
+            b->next = tmp;
+        }
+    }
+    arrange();
+    drawbar();
+    XWarpPointer(dpy, None, root, 0, 0, 0, 0,
+                 focused->x + focused->w / 2,
+                 focused->y + focused->h / 2);
+}
+
 void togglefloat(const WmArg *arg) {
     (void)arg;
     if (!focused || focused->ws != curws) return;

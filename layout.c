@@ -252,6 +252,17 @@ static void arrange_btree(void) {
     btree_arrange_node(btree_roots[curws], g.x, g.y, g.w, g.h);
 }
 
+/* Swap two clients in the binary tree by exchanging their leaf node pointers. */
+void btree_swap(Client *a, Client *b) {
+    BTreeNode *na = a->btree_node;
+    BTreeNode *nb = b->btree_node;
+    if (!na || !nb) return;
+    na->client = b;
+    nb->client = a;
+    a->btree_node = nb;
+    b->btree_node = na;
+}
+
 /* ── dispatcher ─────────────────────────────────────────────────────── */
 
 void arrange(void) {

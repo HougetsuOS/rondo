@@ -420,7 +420,11 @@ static void save_palette_file(const Palette *pal) {
     *dst = '\0';
 
     char fpath[PATH_MAX];
-    snprintf(fpath, sizeof(fpath), "%s/%s.palette", dirpath, safe_name);
+    if (strlen(dirpath) + 1 + strlen(safe_name) + 9 >= sizeof(fpath)) return;
+    strcpy(fpath, dirpath);
+    strcat(fpath, "/");
+    strcat(fpath, safe_name);
+    strcat(fpath, ".palette");
 
     FILE *f = fopen(fpath, "w");
     if (!f) { perror("rondomgr: save palette"); return; }
@@ -772,7 +776,10 @@ static void load_user_palettes(void) {
         if (strcmp(ent->d_name + nlen - 9, ".palette") != 0) continue;
         if (num_palettes >= MAX_PALETTES) break;
         char fpath[PATH_MAX];
-        snprintf(fpath, sizeof(fpath), "%s/%s", dirpath, ent->d_name);
+        if (strlen(dirpath) + 1 + nlen >= sizeof(fpath)) continue;
+        strcpy(fpath, dirpath);
+        strcat(fpath, "/");
+        strcat(fpath, ent->d_name);
         Palette *pal = &palettes[num_palettes];
         memset(pal, 0, sizeof(*pal));
         pal->builtin = 0;
@@ -1347,8 +1354,13 @@ static void delete_palette_cb(Widget w, XtPointer client_data, XtPointer call_da
         }
         *dst = '\0';
         char fpath[PATH_MAX];
-        snprintf(fpath, sizeof(fpath), "%s/%s.palette", dirpath, safe_name);
-        unlink(fpath);
+        if (strlen(dirpath) + 1 + strlen(safe_name) + 9 < sizeof(fpath)) {
+            strcpy(fpath, dirpath);
+            strcat(fpath, "/");
+            strcat(fpath, safe_name);
+            strcat(fpath, ".palette");
+            unlink(fpath);
+        }
     }
 
     /* remove from array */
@@ -1594,7 +1606,7 @@ static const char *action_names[] = {
     "spawn","killclient","focusstack","cyclewindows","lowerwindow",
     "togglefloat","incmaster","zoom","togglefullscreen",
     "viewworkspace","movetoworkspace","quit","swapbar",
-    "setlayout","cyclelayout","reloadconfig","togglecompositing"
+    "setlayout","cyclelayout","focusdir","swapdir","reloadconfig","togglecompositing"
 };
 #define NUM_ACTION_NAMES ((int)(sizeof(action_names)/sizeof(action_names[0])))
 
@@ -1605,10 +1617,10 @@ static void refresh_bind_list(void) {
     for (int i = 0; i < num_binds; i++) {
         char line[512];
         if (binds[i].arg[0])
-            snprintf(line, sizeof(line), "%s+%s  →  %s %s",
+            snprintf(line, sizeof(line), "%.60s+%.60s  →  %.60s %.120s",
                      binds[i].mod, binds[i].key, binds[i].action, binds[i].arg);
         else
-            snprintf(line, sizeof(line), "%s+%s  →  %s",
+            snprintf(line, sizeof(line), "%.60s+%.60s  →  %.60s",
                      binds[i].mod, binds[i].key, binds[i].action);
         XmString xms = XmStringCreateLocalized(line);
         XmListAddItem(w_bind_list, xms, i + 1);

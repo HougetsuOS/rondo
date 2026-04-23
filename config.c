@@ -539,6 +539,8 @@ static const ActionEntry action_table[] = {
     { "togglecompositing", togglecompositing },
     { "setlayout",       setlayout },
     { "cyclelayout",      cyclelayout },
+    { "focusdir",         focusdir },
+    { "swapdir",          swapdir },
 };
 #define NUM_ACTIONS ((int)(sizeof(action_table) / sizeof(action_table[0])))
 
@@ -1024,6 +1026,15 @@ static void cfg_set_defaults(void) {
         { Mod1Mask|ShiftMask,  XK_Tab,        lowerwindow,      { 0 } },
         { Mod1Mask|ShiftMask,  XK_b,          swapbar,           { 0 } },
         { Mod1Mask|ShiftMask,  XK_o,          togglecompositing, { 0 } },
+        { Mod1Mask|ShiftMask,  XK_t,          cyclelayout,       { 0 } },
+        { Mod1Mask,            XK_Up,         focusdir,          { .i = EDGE_N } },
+        { Mod1Mask,            XK_Down,       focusdir,          { .i = EDGE_S } },
+        { Mod1Mask,            XK_Left,       focusdir,          { .i = EDGE_W } },
+        { Mod1Mask,            XK_Right,      focusdir,          { .i = EDGE_E } },
+        { Mod1Mask|ShiftMask,  XK_Up,         swapdir,            { .i = EDGE_N } },
+        { Mod1Mask|ShiftMask,  XK_Down,       swapdir,            { .i = EDGE_S } },
+        { Mod1Mask|ShiftMask,  XK_Left,       swapdir,            { .i = EDGE_W } },
+        { Mod1Mask|ShiftMask,  XK_Right,      swapdir,            { .i = EDGE_E } },
     };
 
     /* spawn args for default keys */
