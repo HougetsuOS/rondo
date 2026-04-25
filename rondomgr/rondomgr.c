@@ -955,9 +955,7 @@ static int ipc_send(const char *cmd)
  * ═══════════════════════════════════════════════════════════════════════ */
 
 static XtAppContext app;
-static Widget toplevel, main_form, tab_stack;
-static Widget panels[7]; /* 0=Dimensions,1=Bar,2=Appearance,3=Programs,4=Compositing,5=Background,6=Keybindings */
-static int current_panel = 0;
+static Widget toplevel, tab_stack;
 
 /* widget handles for reading back values */
 static Widget w_frame_width, w_title_height, w_bar_height, w_btn_width, w_btn_height;
@@ -967,7 +965,7 @@ static Widget w_master_ratio, w_show_bar;
 static Widget w_bar_position, w_iconbar_position, w_icon_mode;
 static Widget w_fade_enabled, w_fade_in_ms, w_fade_out_ms, w_tooltip_delay;
 static Widget w_font, w_terminal, w_launcher, w_modkey, w_clock_format, w_tooltip_font;
-static Widget w_bg_mode[3], w_bg_pattern, w_bg_color, w_bg_color2, w_bg_image_path, w_bg_image_mode;
+static Widget w_bg_mode, w_bg_pattern, w_bg_color, w_bg_color2, w_bg_image_path, w_bg_image_mode;
 /* color widgets */
 typedef struct { Widget text; Widget preview; const char *key; char *value; } ColorWidget;
 static ColorWidget color_widgets[30];
@@ -975,27 +973,7 @@ static int num_color_widgets = 0;
 
 /* keybindings panel */
 static Widget w_bind_list;       /* XmList showing current bindings */
-static Widget w_bind_add_btn, w_bind_edit_btn, w_bind_remove_btn;
 
-static void show_panel(int which) {
-    Widget tab_child = XmTabStackIndexToWidget(tab_stack, which);
-    if (tab_child)
-        XmTabStackSelectTab(tab_child, True);
-    current_panel = which;
-}
-
-static void tab_select_cb(Widget w, XtPointer client_data, XtPointer call_data) {
-    (void)w;
-    (void)client_data;
-    XmTabStackCallbackStruct *cbs = (XmTabStackCallbackStruct *)call_data;
-    Widget selected = cbs->selected_child;
-    for (int i = 0; i < 7; i++) {
-        if (XmTabStackIndexToWidget(tab_stack, i) == selected) {
-            current_panel = i;
-            return;
-        }
-    }
-}
 
 static void make_scale(Widget parent, Widget *out, const char *label, int min, int max, int val) {
     Widget row = XtVaCreateManagedWidget("row", xmFormWidgetClass, parent,
@@ -1125,7 +1103,14 @@ static void browse_btn_cb(Widget w, XtPointer client_data, XtPointer call_data) 
 }
 
 /* color pixel from hex string */
-static Pixel color_pixel(const char *name);
+static Pixel color_pixel(const char *name) {
+    Display *d = XtDisplay(toplevel);
+    Colormap cmap = DefaultColormap(d, DefaultScreen(d));
+    XColor c;
+    if (XParseColor(d, cmap, name, &c) && XAllocColor(d, cmap, &c))
+        return c.pixel;
+    return WhitePixel(d, DefaultScreen(d));
+}
 
 static void add_color_widget(Widget parent, const char *label, const char *key, char *value) {
     Widget row = XtVaCreateManagedWidget("crow", xmFormWidgetClass, parent, NULL);
@@ -1151,15 +1136,6 @@ static void add_color_widget(Widget parent, const char *label, const char *key, 
 }
 
 /* panel creation helpers */
-
-static Pixel color_pixel(const char *name) {
-    Display *d = XtDisplay(toplevel);
-    Colormap cmap = DefaultColormap(d, DefaultScreen(d));
-    XColor c;
-    if (XParseColor(d, cmap, name, &c) && XAllocColor(d, cmap, &c))
-        return c.pixel;
-    return WhitePixel(d, DefaultScreen(d));
-}
 
 /* Creates a ScrolledWindow containing a RowColumn for panel content.
  * Returns the ScrolledWindow (the tab stack child), sets *rc_out to the
@@ -1224,8 +1200,7 @@ static int option_menu_index(Widget om) {
 
 static void create_dimensions_panel(Widget parent) {
     Widget rc;
-    Widget sw = make_scroll_form(parent, "Dimensions", &rc);
-    panels[0] = sw;
+    make_scroll_form(parent, "Dimensions", &rc);
     make_scale(rc, &w_frame_width, "Frame Width", 1, 20, cfg.frame_width);
     make_scale(rc, &w_title_height, "Title Height", 10, 40, cfg.title_height);
     make_scale(rc, &w_btn_width, "Button Width", 8, 30, cfg.btn_width);
@@ -1234,8 +1209,7 @@ static void create_dimensions_panel(Widget parent) {
 
 static void create_bar_panel(Widget parent) {
     Widget rc;
-    Widget sw = make_scroll_form(parent, "Bar", &rc);
-    panels[1] = sw;
+    make_scroll_form(parent, "Bar", &rc);
     make_scale(rc, &w_bar_height, "Bar Height", 16, 50, cfg.bar_height);
     make_scale(rc, &w_bar_border_width, "Border Width", 0, 20, cfg.bar_border_width);
     make_scale(rc, &w_bar_corner_size, "Corner Size", 8, 40, cfg.bar_corner_size);
@@ -1436,8 +1410,8 @@ static void rebuild_palette_menu(void) {
 }
 
 static void create_appearance_panel(Widget parent) {
-    Widget rc; Widget sw = make_scroll_form(parent, "Appearance", &rc);
-    panels[2] = sw;
+    Widget rc;
+    make_scroll_form(parent, "Appearance", &rc);
     num_color_widgets = 0;
 
     /* ── Palette selector row ── */
@@ -1527,8 +1501,8 @@ static void create_appearance_panel(Widget parent) {
 }
 
 static void create_programs_panel(Widget parent) {
-    Widget rc; Widget sw = make_scroll_form(parent, "Programs", &rc);
-    panels[3] = sw;
+    Widget rc;
+    make_scroll_form(parent, "Programs", &rc);
     make_text_row(rc, &w_font, "Font", cfg.font);
     make_text_row(rc, &w_terminal, "Terminal", cfg.terminal);
     make_text_row(rc, &w_launcher, "Launcher", cfg.launcher);
@@ -1538,8 +1512,8 @@ static void create_programs_panel(Widget parent) {
 }
 
 static void create_compositing_panel(Widget parent) {
-    Widget rc; Widget sw = make_scroll_form(parent, "Compositing", &rc);
-    panels[4] = sw;
+    Widget rc;
+    make_scroll_form(parent, "Compositing", &rc);
     w_fade_enabled = XtVaCreateManagedWidget("Fade Enabled", xmToggleButtonWidgetClass, rc,
         XmNset, cfg.fade_enabled, NULL);
     make_scale(rc, &w_fade_in_ms, "Fade In (ms)", 0, 1000, cfg.fade_in_ms);
@@ -1548,15 +1522,15 @@ static void create_compositing_panel(Widget parent) {
 }
 
 static void create_background_panel(Widget parent) {
-    Widget rc; Widget sw = make_scroll_form(parent, "Background", &rc);
-    panels[5] = sw;
+    Widget rc;
+    make_scroll_form(parent, "Background", &rc);
     Widget row = XtVaCreateManagedWidget("row", xmFormWidgetClass, rc, NULL);
     Widget lbl = XtVaCreateManagedWidget("Background Mode", xmLabelWidgetClass, row,
         XmNtopAttachment, XmATTACH_FORM, XmNbottomAttachment, XmATTACH_FORM,
         XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 4, NULL);
     static char *bg_opts[] = {"Solid","Pattern","Image"};
     Widget bg_om = make_option_menu(row, "bgmode", bg_opts, 3, cfg.bg_mode);
-    w_bg_mode[0] = bg_om;
+    w_bg_mode = bg_om;
     XtVaSetValues(bg_om,
         XmNtopAttachment, XmATTACH_FORM, XmNbottomAttachment, XmATTACH_FORM,
         XmNleftAttachment, XmATTACH_WIDGET, XmNleftWidget, lbl,
@@ -1800,7 +1774,6 @@ static void create_keybindings_panel(Widget parent) {
     Widget p = XtVaCreateWidget("panel", xmFormWidgetClass, parent,
         XmNtabLabelString, xms, NULL);
     XmStringFree(xms);
-    panels[6] = p;
 
     /* Button row at bottom */
     Widget kbtn_row = XtVaCreateManagedWidget("btns", xmRowColumnWidgetClass, p,
@@ -1809,12 +1782,12 @@ static void create_keybindings_panel(Widget parent) {
         XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 4,
         XmNrightAttachment, XmATTACH_FORM, XmNrightOffset, 4,
         NULL);
-    w_bind_add_btn = XtVaCreateManagedWidget("Add", xmPushButtonWidgetClass, kbtn_row, NULL);
-    w_bind_edit_btn = XtVaCreateManagedWidget("Edit", xmPushButtonWidgetClass, kbtn_row, NULL);
-    w_bind_remove_btn = XtVaCreateManagedWidget("Remove", xmPushButtonWidgetClass, kbtn_row, NULL);
-    XtAddCallback(w_bind_add_btn, XmNactivateCallback, bind_add_cb, NULL);
-    XtAddCallback(w_bind_edit_btn, XmNactivateCallback, bind_edit_cb, NULL);
-    XtAddCallback(w_bind_remove_btn, XmNactivateCallback, bind_remove_cb, NULL);
+    Widget add_btn = XtVaCreateManagedWidget("Add", xmPushButtonWidgetClass, kbtn_row, NULL);
+    Widget edit_btn = XtVaCreateManagedWidget("Edit", xmPushButtonWidgetClass, kbtn_row, NULL);
+    Widget remove_btn = XtVaCreateManagedWidget("Remove", xmPushButtonWidgetClass, kbtn_row, NULL);
+    XtAddCallback(add_btn, XmNactivateCallback, bind_add_cb, NULL);
+    XtAddCallback(edit_btn, XmNactivateCallback, bind_edit_cb, NULL);
+    XtAddCallback(remove_btn, XmNactivateCallback, bind_remove_cb, NULL);
 
     /* Scrolled list fills remaining space above buttons */
     Arg list_args[2]; int list_n = 0;
@@ -1869,7 +1842,7 @@ static void push_cfg_to_widgets(void) {
     set_option_menu_idx(w_bar_position, cfg.bar_position);
     set_option_menu_idx(w_icon_mode, cfg.icon_mode);
     set_option_menu_idx(w_iconbar_position, cfg.iconbar_position);
-    set_option_menu_idx(w_bg_mode[0], cfg.bg_mode);
+    set_option_menu_idx(w_bg_mode, cfg.bg_mode);
     set_option_menu_idx(w_bg_pattern, cfg.bg_pattern);
     set_option_menu_idx(w_bg_image_mode, cfg.bg_image_mode);
     /* text fields */
@@ -1919,7 +1892,7 @@ static void read_gui_state(void) {
     cfg.bar_position = option_menu_index(w_bar_position);
     cfg.icon_mode = option_menu_index(w_icon_mode);
     cfg.iconbar_position = option_menu_index(w_iconbar_position);
-    cfg.bg_mode = option_menu_index(w_bg_mode[0]);
+    cfg.bg_mode = option_menu_index(w_bg_mode);
     cfg.bg_pattern = option_menu_index(w_bg_pattern);
     cfg.bg_image_mode = option_menu_index(w_bg_image_mode);
     /* text fields */
@@ -1984,6 +1957,7 @@ static void quit_cb(Widget w, XtPointer client_data, XtPointer call_data) {
  * ═══════════════════════════════════════════════════════════════════════ */
 
 int main(int argc, char *argv[]) {
+    Widget main_form;
     init_builtin_palettes();
     load_user_palettes();
     load_config();
@@ -2031,8 +2005,6 @@ int main(int argc, char *argv[]) {
         XmNtabStyle, XmTABS_ROUNDED,
         XmNtabMode, XmTABS_STACKED_STATIC,
         NULL);
-    XtAddCallback(tab_stack, XmNtabSelectedCallback, tab_select_cb, NULL);
-
     /* create panels as children of the tab stack */
     create_dimensions_panel(tab_stack);
     create_bar_panel(tab_stack);
