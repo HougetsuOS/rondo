@@ -373,7 +373,8 @@ void setup(int *argc, char **argv) {
             0, bar_depth, InputOutput, argb_visual,
             CWBackPixel | CWBorderPixel | CWColormap, &swa);
     }
-    XSelectInput(dpy, barwin, ExposureMask | ButtonPressMask);
+    XSelectInput(dpy, barwin, ExposureMask | ButtonPressMask |
+                 SubstructureNotifyMask | SubstructureRedirectMask);
     if (show_bar)
         XMapWindow(dpy, barwin);
 
@@ -481,6 +482,13 @@ void setup(int *argc, char **argv) {
     net_wm_window_opacity           = XInternAtom(dpy, "_NET_WM_WINDOW_OPACITY", False);
     net_wm_cm_s0                    = XInternAtom(dpy, "_NET_WM_CM_S0", False);
 
+    /* system tray atoms */
+    net_system_tray        = XInternAtom(dpy, "_NET_SYSTEM_TRAY_S0", False);
+    net_system_tray_visual = XInternAtom(dpy, "_NET_SYSTEM_TRAY_VISUAL", False);
+    net_system_tray_opcode = XInternAtom(dpy, "_NET_SYSTEM_TRAY_OPCODE", False);
+    manager_atom           = XInternAtom(dpy, "MANAGER", False);
+    xembed                 = XInternAtom(dpy, "_XEMBED", False);
+
     /* set _NET_SUPPORTED — announce which EWMH atoms we support */
     {
         Atom supported[] = {
@@ -495,6 +503,7 @@ void setup(int *argc, char **argv) {
             net_wm_window_type_splash, net_wm_window_type_popup_menu,
             net_wm_window_type_dropdown_menu, net_wm_window_type_tooltip,
             net_wm_window_type_notification,
+            net_system_tray,
             net_supporting, net_wm_name
         };
         XChangeProperty(dpy, root, net_supported, XA_ATOM, 32,
@@ -526,6 +535,19 @@ void setup(int *argc, char **argv) {
     /* start periodic bar refresh for clock/load/mem/disk */
     start_bar_timer();
 
+    /* initialize system tray if tray widget is configured */
+    {
+        int has_tray = 0;
+        for (int i = 0; i < num_bar_widgets; i++) {
+            if (bar_widgets[i].type == BAR_WIDGET_TRAY) {
+                has_tray = 1;
+                break;
+            }
+        }
+        if (has_tray)
+            tray_init();
+    }
+
     /* start built-in compositor if no external compositor is running
      * and compositing is enabled in config */
     if (fade_enabled)
@@ -535,6 +557,8 @@ void setup(int *argc, char **argv) {
 /* ── cleanup ────────────────────────────────────────────────────────── */
 
 void cleanup(void) {
+    tray_cleanup();
+
     /* cancel all in-progress fades */
     for (Client *c = clients; c; c = c->next) {
         if (c->fade_timer) {

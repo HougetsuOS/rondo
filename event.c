@@ -94,6 +94,14 @@ int handle_buttonpress(XButtonEvent *ev) {
 }
 
 void handle_clientmessage(XClientMessageEvent *ev) {
+    /* system tray dock request */
+    if (ev->message_type == net_system_tray_opcode &&
+        ev->data.l[1] == 0 /* SYSTEM_TRAY_REQUEST_DOCK */) {
+        Window icon_win = (Window)ev->data.l[2];
+        tray_dock(icon_win);
+        return;
+    }
+
     if (ev->message_type == net_wm_state &&
         ev->data.l[1] == (long)net_wm_state_fullscreen) {
         Client *c = wintoclient(ev->window);
@@ -168,6 +176,26 @@ void handle_configurerequest(XConfigureRequestEvent *ev) {
             arrange();
         }
     } else {
+        /* check if this is a tray icon requesting a resize */
+        int is_tray_icon = 0;
+        for (int i = 0; i < num_tray_icons; i++) {
+            if (tray_icons[i].icon == ev->window) {
+                is_tray_icon = 1;
+                break;
+            }
+        }
+        if (is_tray_icon) {
+            int sz = tray_icon_size();
+            XWindowChanges wc;
+            wc.x = 0; wc.y = 0;
+            wc.width = (ev->value_mask & CWWidth) ? MIN(ev->width, sz) : sz;
+            wc.height = (ev->value_mask & CWHeight) ? MIN(ev->height, sz) : sz;
+            wc.border_width = 0;
+            XConfigureWindow(dpy, ev->window,
+                            CWX | CWY | CWWidth | CWHeight | CWBorderWidth,
+                            &wc);
+            return;
+        }
         XWindowChanges wc;
         wc.x = ev->x; wc.y = ev->y; wc.width = ev->width; wc.height = ev->height;
         wc.border_width = ev->border_width; wc.sibling = ev->above; wc.stack_mode = ev->detail;
@@ -176,6 +204,14 @@ void handle_configurerequest(XConfigureRequestEvent *ev) {
 }
 
 void handle_destroynotify(XDestroyWindowEvent *ev) {
+    /* check if a tray icon was destroyed */
+    for (int i = 0; i < num_tray_icons; i++) {
+        if (tray_icons[i].icon == ev->window) {
+            tray_remove(ev->window);
+            return;
+        }
+    }
+
     /* untrack from compositor if this window was redirected */
     compositor_untrack_window(ev->window);
     /* Only match on the client window, not the frame */
@@ -409,6 +445,10 @@ void run(void) {
                     if (c && c == focused)
                         XInstallColormap(dpy, c->cmap);
                 }
+                break;
+            case SelectionClear:
+                if (ev.xselectionclear.window == tray_win)
+                    tray_cleanup();
                 break;
             default:
                 /* handle DamageNotify for built-in compositor */

@@ -330,6 +330,9 @@ static int title_alloc_w = 0;
 static int vol_widget_x = -1, vol_widget_y = -1;
 static int vol_widget_w = 0, vol_widget_h = 0;
 
+/* Tray widget allocated region (set during draw, used by tray_reposition). */
+/* Defined in tray.c — extern declarations in wm.h */
+
 /* Helper: measure and draw a single bar widget.
  * Returns the width the widget occupies.
  * If draw is false, only measures (no drawing).
@@ -407,6 +410,21 @@ static int draw_bar_widget(BarWidgetType type, int x, int btn_y, int btn_sz,
         return w;
     }
 
+    case BAR_WIDGET_TRAY: {
+        int sz = tray_icon_size();
+        int pad = 2;
+        int n = num_tray_icons > 0 ? num_tray_icons : 0;
+        int total = n * (sz + pad) + pad;
+        if (draw && total > 0) {
+            /* record allocated region for tray_reposition() */
+            tray_widget_x = x;
+            tray_widget_y = btn_y;
+            tray_widget_w = total;
+            tray_widget_h = btn_sz;
+        }
+        return total;
+    }
+
     case BAR_WIDGET_LAYOUT: /* fallthrough */
     case BAR_WIDGET_CLOCK: /* fallthrough */
     case BAR_WIDGET_LOAD: /* fallthrough */
@@ -457,10 +475,14 @@ static int draw_bar_widget(BarWidgetType type, int x, int btn_y, int btn_sz,
 void drawbar(void) {
     if (!show_bar) return;
     if (!xftdraw || !xftfont) return;
+    tray_widget_x = 0; tray_widget_y = 0;
+    tray_widget_w = 0; tray_widget_h = 0;
     if (is_horizontal(bar_position))
         drawbar_horizontal();
     else
         drawbar_vertical();
+    if (tray_widget_w > 0 && num_tray_icons > 0)
+        tray_reposition();
 }
 
 /* Draw the bar border for a bar at a given position.
@@ -653,24 +675,32 @@ static void drawbar_vertical(void) {
 
     /* text widgets (clock, load, mem, disk) stacked at the bottom, drawn vertically */
     {
-        /* collect bottom-aligned text widgets in reverse order so we stack up from bottom */
-        BarWidgetType bottom_widgets[8];
+        /* collect bottom-aligned widgets in reverse order so we stack up from bottom */
+        BarWidgetType bottom_widgets[16];
         int n_bottom = 0;
         for (int i = num_bar_widgets - 1; i >= 0; i--) {
             if (bar_widgets[i].align == BAR_ALIGN_RIGHT &&
                 bar_widgets[i].type != BAR_WIDGET_WS && bar_widgets[i].type != BAR_WIDGET_TITLE) {
-                bottom_widgets[n_bottom++] = bar_widgets[i].type;
+                if (n_bottom < 16)
+                    bottom_widgets[n_bottom++] = bar_widgets[i].type;
             }
         }
         /* measure max heights first for stable positioning */
         int max_h[16];
         for (int bi = 0; bi < n_bottom && bi < 16; bi++) {
-            char mtext[64];
-            int mlen = widget_text(bottom_widgets[bi], mtext, sizeof(mtext), 1);
-            if (mlen <= 0) { max_h[bi] = 0; continue; }
-            XGlyphInfo ext;
-            XftTextExtents8(dpy, xftfont, (XftChar8 *)mtext, mlen, &ext);
-            max_h[bi] = ext.xOff + 4;  /* +4 for gap */
+            if (bottom_widgets[bi] == BAR_WIDGET_TRAY) {
+                int sz = tray_icon_size();
+                int pad = 2;
+                max_h[bi] = num_tray_icons * (sz + pad) + pad;
+                if (max_h[bi] < sz + pad) max_h[bi] = sz + pad;
+            } else {
+                char mtext[64];
+                int mlen = widget_text(bottom_widgets[bi], mtext, sizeof(mtext), 1);
+                if (mlen <= 0) { max_h[bi] = 0; continue; }
+                XGlyphInfo ext;
+                XftTextExtents8(dpy, xftfont, (XftChar8 *)mtext, mlen, &ext);
+                max_h[bi] = ext.xOff + 4;  /* +4 for gap */
+            }
         }
         /* compute y positions from max heights */
         int text_y_start = bar_h - bw - 4;
@@ -681,6 +711,15 @@ static void drawbar_vertical(void) {
         int widget_y_cursor = text_y_start;
         for (int bi = 0; bi < n_bottom; bi++) {
             if (max_h[bi] == 0) continue;
+            if (bottom_widgets[bi] == BAR_WIDGET_TRAY) {
+                /* tray: no text to draw, just record region for wrapper positioning */
+                tray_widget_x = interior_left;
+                tray_widget_y = widget_y_cursor;
+                tray_widget_w = interior_w;
+                tray_widget_h = max_h[bi];
+                widget_y_cursor += max_h[bi];
+                continue;
+            }
             char text[64];
             int len = widget_text(bottom_widgets[bi], text, sizeof(text), 0);
             if (len <= 0) { widget_y_cursor += max_h[bi]; continue; }

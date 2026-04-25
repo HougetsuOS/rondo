@@ -871,6 +871,7 @@ static void cfg_apply_form(CfgNode *form) {
             else if (strcmp(wtype, "cpu")   == 0) bw->type = BAR_WIDGET_CPU;
             else if (strcmp(wtype, "net")   == 0) bw->type = BAR_WIDGET_NET;
             else if (strcmp(wtype, "temp")  == 0) bw->type = BAR_WIDGET_TEMP;
+            else if (strcmp(wtype, "tray")  == 0) bw->type = BAR_WIDGET_TRAY;
             else continue;
             bw->align = (strcmp(align, "left") == 0) ? BAR_ALIGN_LEFT : BAR_ALIGN_RIGHT;
             cfg_num_bar_widgets++;
@@ -1069,6 +1070,7 @@ static void cfg_set_defaults(void) {
         { BAR_WIDGET_LOAD,  BAR_ALIGN_RIGHT },
         { BAR_WIDGET_MEM,   BAR_ALIGN_RIGHT },
         { BAR_WIDGET_DISK,  BAR_ALIGN_RIGHT },
+        { BAR_WIDGET_TRAY,  BAR_ALIGN_RIGHT },
         { BAR_WIDGET_CLOCK, BAR_ALIGN_RIGHT },
     };
     int nbw = (int)LENGTH(default_bar_widgets);

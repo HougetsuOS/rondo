@@ -130,6 +130,12 @@ typedef struct {
     int ibar_x, ibar_y, ibar_w, ibar_h; /* icon bar window rect */
 } BarGeometry;
 
+/* tray icon entry (XEmbed notification area) */
+typedef struct {
+    Window wrapper;   /* wrapper window (child of barwin) */
+    Window icon;      /* docked icon window (child of wrapper) */
+} TrayIcon;
+
 /* ── globals (defined in main.c) ───────────────────────────────────── */
 
 extern Display *dpy;
@@ -198,6 +204,12 @@ extern XftColor col_root_bg;
 extern XftColor col_root_bg2;
 extern XftColor col_dlg_bg;
 
+/* tray (XEmbed notification area) */
+extern TrayIcon *tray_icons;
+extern int num_tray_icons;
+extern Window tray_win;
+extern int tray_widget_x, tray_widget_y, tray_widget_w, tray_widget_h;
+
 extern Cursor curs_resize[16];
 extern Cursor curs_default;
 
@@ -223,6 +235,13 @@ extern Atom net_wm_window_type_notification;
 extern Atom motif_wm_hints;
 extern Atom net_wm_window_opacity;
 extern Atom net_wm_cm_s0;
+
+/* system tray atoms */
+extern Atom net_system_tray;
+extern Atom net_system_tray_visual;
+extern Atom net_system_tray_opcode;
+extern Atom manager_atom;
+extern Atom xembed;
 
 /* MWM hints flags */
 #define MWM_HINTS_FUNCTIONS    (1L << 0)
@@ -406,5 +425,14 @@ void compositor_configure_window(Window w);
 void compositor_manage_client(Client *c);
 void compositor_repaint(void);
 int compositor_handle_damage(XDamageNotifyEvent *ev);
+
+/* tray.c */
+int tray_icon_size(void);
+void tray_init(void);
+void tray_dock(Window icon_win);
+void tray_remove(Window icon_win);
+void tray_update(void);
+void tray_reposition(void);
+void tray_cleanup(void);
 
 #endif /* WM_H */
