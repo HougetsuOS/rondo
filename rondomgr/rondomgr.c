@@ -2017,7 +2017,9 @@ int main(int argc, char *argv[]) {
         const char *section_names[] = {"Dimensions","Bar","Appearance","Programs","Compositing","Background","Keybindings"};
         for (int i = 0; i < 7; i++) {
             Widget tab_child = XtVaCreateManagedWidget(section_names[i],
-                xmFormWidgetClass, tab_stack, NULL);
+                xmFormWidgetClass, tab_stack,
+                XmNheight, 1,
+                NULL);
             (void)tab_child;
         }
 
