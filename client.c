@@ -253,7 +253,7 @@ void manage(Window w, XWindowAttributes *wa) {
 
     c->win = w;
     c->ws = curws;
-    c->is_floating = 0;
+    c->is_floating = 1;
     c->is_fullscreen = 0;
     c->is_minimized = 0;
     c->is_hidden = 0;
