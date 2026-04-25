@@ -22,6 +22,7 @@
 #include <Xm/Frame.h>
 #include <Xm/FileSB.h>
 #include <Xm/ScrolledW.h>
+#include <Xm/TabStack.h>
 #include <X11/IntrinsicP.h>   /* for CompositeWidget internal access */
 #include <X11/Xatom.h>
 #include <X11/Xutil.h>
@@ -954,7 +955,7 @@ static int ipc_send(const char *cmd)
  * ═══════════════════════════════════════════════════════════════════════ */
 
 static XtAppContext app;
-static Widget toplevel, main_form, section_rc, section_sw, scroll_win;
+static Widget toplevel, main_form, tab_stack, scroll_win;
 static Widget panels[7]; /* 0=Dimensions,1=Bar,2=Appearance,3=Programs,4=Compositing,5=Background,6=Keybindings */
 static int current_panel = 0;
 
@@ -991,9 +992,19 @@ static void show_panel(int which) {
     current_panel = which;
 }
 
-static void section_cb(Widget w, XtPointer client_data, XtPointer call_data) {
-    (void)w; (void)call_data;
-    show_panel((int)(intptr_t)client_data);
+static void tab_select_cb(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w;
+    (void)client_data;
+    XmTabStackCallbackStruct *cbs = (XmTabStackCallbackStruct *)call_data;
+    /* find which tab was selected by matching the selected_child */
+    Widget selected = cbs->selected_child;
+    for (int i = 0; i < 7; i++) {
+        Widget tab_child = XmTabStackIndexToWidget(tab_stack, i);
+        if (tab_child == selected) {
+            show_panel(i);
+            return;
+        }
+    }
 }
 
 static void make_scale(Widget parent, Widget *out, const char *label, int min, int max, int val) {
@@ -1991,39 +2002,31 @@ int main(int argc, char *argv[]) {
     main_form = XtVaCreateManagedWidget("main", xmFormWidgetClass, toplevel,
         XmNfractionBase, 100, NULL);
 
-    /* section buttons — in a scrolled row so they scroll when narrow */
+    /* section tabs */
     {
-        Arg sw_args[2];
-        int sw_n = 0;
-        XtSetArg(sw_args[sw_n], XmNscrollingPolicy, XmAUTOMATIC); sw_n++;
-        XtSetArg(sw_args[sw_n], XmNscrollBarDisplayPolicy, XmAS_NEEDED); sw_n++;
-        section_sw = XmCreateScrolledWindow(main_form, "section_sw", sw_args, sw_n);
-        XtVaSetValues(section_sw,
+        tab_stack = XmCreateTabStack(main_form, "tabs", NULL, 0);
+        XtVaSetValues(tab_stack,
             XmNtopAttachment, XmATTACH_FORM,
             XmNleftAttachment, XmATTACH_FORM, XmNrightAttachment, XmATTACH_FORM,
+            XmNtabSide, XmTABS_ON_TOP,
+            XmNtabStyle, XmTABS_ROUNDED,
             NULL);
-        XtManageChild(section_sw);
-
-        section_rc = XtVaCreateManagedWidget("sections", xmRowColumnWidgetClass, section_sw,
-            XmNorientation, XmHORIZONTAL, XmNpacking, XmPACK_COLUMN,
-            XmNnumColumns, 1, XmNentryAlignment, XmALIGNMENT_CENTER,
-            XmNradioAlwaysOne, True,
-            NULL);
+        XtAddCallback(tab_stack, XmNtabSelectedCallback, tab_select_cb, NULL);
 
         const char *section_names[] = {"Dimensions","Bar","Appearance","Programs","Compositing","Background","Keybindings"};
         for (int i = 0; i < 7; i++) {
-            Widget btn = XtVaCreateManagedWidget(section_names[i],
-                xmPushButtonWidgetClass, section_rc, NULL);
-            XtAddCallback(btn, XmNactivateCallback, section_cb, (XtPointer)(intptr_t)i);
+            Widget tab_child = XtVaCreateManagedWidget(section_names[i],
+                xmFormWidgetClass, tab_stack, NULL);
+            (void)tab_child;
         }
 
-        XmScrolledWindowSetAreas(section_sw, NULL, NULL, section_rc);
+        XtManageChild(tab_stack);
     }
 
     /* separator */
     Widget sep = XtVaCreateManagedWidget("sep", xmSeparatorWidgetClass, main_form,
         XmNtopAttachment, XmATTACH_WIDGET,
-        XmNtopWidget, section_sw,
+        XmNtopWidget, tab_stack,
         XmNleftAttachment, XmATTACH_FORM, XmNrightAttachment, XmATTACH_FORM,
         NULL);
 
