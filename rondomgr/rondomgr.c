@@ -1164,11 +1164,14 @@ static Pixel color_pixel(const char *name) {
 /* Creates a ScrolledWindow containing a RowColumn for panel content.
  * Returns the ScrolledWindow (the tab stack child), sets *rc_out to the
  * RowColumn (the container for panel widgets). */
-static Widget make_scroll_form(Widget parent, Widget *rc_out) {
-    Arg sw_args[2]; int sw_n = 0;
+static Widget make_scroll_form(Widget parent, const char *tab_label, Widget *rc_out) {
+    XmString xms = XmStringCreateLocalized((char *)tab_label);
+    Arg sw_args[4]; int sw_n = 0;
     XtSetArg(sw_args[sw_n], XmNscrollingPolicy, XmAUTOMATIC); sw_n++;
     XtSetArg(sw_args[sw_n], XmNscrollBarDisplayPolicy, XmAS_NEEDED); sw_n++;
+    XtSetArg(sw_args[sw_n], XmNtabLabelString, xms); sw_n++;
     Widget sw = XmCreateScrolledWindow(parent, "panel_sw", sw_args, sw_n);
+    XmStringFree(xms);
 
     Widget rc = XtVaCreateWidget("panel", xmRowColumnWidgetClass, sw,
         XmNorientation, XmVERTICAL, XmNpacking, XmPACK_COLUMN,
@@ -1221,7 +1224,7 @@ static int option_menu_index(Widget om) {
 
 static void create_dimensions_panel(Widget parent) {
     Widget rc;
-    Widget sw = make_scroll_form(parent, &rc);
+    Widget sw = make_scroll_form(parent, "Dimensions", &rc);
     panels[0] = sw;
     make_scale(rc, &w_frame_width, "Frame Width", 1, 20, cfg.frame_width);
     make_scale(rc, &w_title_height, "Title Height", 10, 40, cfg.title_height);
@@ -1231,7 +1234,7 @@ static void create_dimensions_panel(Widget parent) {
 
 static void create_bar_panel(Widget parent) {
     Widget rc;
-    Widget sw = make_scroll_form(parent, &rc);
+    Widget sw = make_scroll_form(parent, "Bar", &rc);
     panels[1] = sw;
     make_scale(rc, &w_bar_height, "Bar Height", 16, 50, cfg.bar_height);
     make_scale(rc, &w_bar_border_width, "Border Width", 0, 20, cfg.bar_border_width);
@@ -1433,7 +1436,7 @@ static void rebuild_palette_menu(void) {
 }
 
 static void create_appearance_panel(Widget parent) {
-    Widget rc; Widget sw = make_scroll_form(parent, &rc);
+    Widget rc; Widget sw = make_scroll_form(parent, "Appearance", &rc);
     panels[2] = sw;
     num_color_widgets = 0;
 
@@ -1524,7 +1527,7 @@ static void create_appearance_panel(Widget parent) {
 }
 
 static void create_programs_panel(Widget parent) {
-    Widget rc; Widget sw = make_scroll_form(parent, &rc);
+    Widget rc; Widget sw = make_scroll_form(parent, "Programs", &rc);
     panels[3] = sw;
     make_text_row(rc, &w_font, "Font", cfg.font);
     make_text_row(rc, &w_terminal, "Terminal", cfg.terminal);
@@ -1535,7 +1538,7 @@ static void create_programs_panel(Widget parent) {
 }
 
 static void create_compositing_panel(Widget parent) {
-    Widget rc; Widget sw = make_scroll_form(parent, &rc);
+    Widget rc; Widget sw = make_scroll_form(parent, "Compositing", &rc);
     panels[4] = sw;
     w_fade_enabled = XtVaCreateManagedWidget("Fade Enabled", xmToggleButtonWidgetClass, rc,
         XmNset, cfg.fade_enabled, NULL);
@@ -1545,7 +1548,7 @@ static void create_compositing_panel(Widget parent) {
 }
 
 static void create_background_panel(Widget parent) {
-    Widget rc; Widget sw = make_scroll_form(parent, &rc);
+    Widget rc; Widget sw = make_scroll_form(parent, "Background", &rc);
     panels[5] = sw;
     Widget row = XtVaCreateManagedWidget("row", xmFormWidgetClass, rc, NULL);
     Widget lbl = XtVaCreateManagedWidget("Background Mode", xmLabelWidgetClass, row,
@@ -1793,8 +1796,10 @@ static void bind_remove_cb(Widget w, XtPointer cd, XtPointer cbs) {
 }
 
 static void create_keybindings_panel(Widget parent) {
+    XmString xms = XmStringCreateLocalized("Keybindings");
     Widget p = XtVaCreateWidget("panel", xmFormWidgetClass, parent,
-        NULL);
+        XmNtabLabelString, xms, NULL);
+    XmStringFree(xms);
     panels[6] = p;
 
     /* Button row at bottom */
