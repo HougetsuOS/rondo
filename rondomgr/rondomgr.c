@@ -2010,6 +2010,7 @@ int main(int argc, char *argv[]) {
             XmNleftAttachment, XmATTACH_FORM, XmNrightAttachment, XmATTACH_FORM,
             XmNtabSide, XmTABS_ON_TOP,
             XmNtabStyle, XmTABS_ROUNDED,
+            XmNtabMode, XmTABS_STACKED_STATIC,
             NULL);
         XtAddCallback(tab_stack, XmNtabSelectedCallback, tab_select_cb, NULL);
 
