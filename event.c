@@ -165,6 +165,14 @@ void handle_configurerequest(XConfigureRequestEvent *ev) {
             client_to_frame(cw, ch, &fw, &fh, c->no_decor);
             if (ev->value_mask & CWX)      c->x = ev->x - fboff;
             if (ev->value_mask & CWY)      c->y = ev->y - fboff - toff;
+            /* clamp to usable area: avoid bar and keep on screen */
+            {
+                BarGeometry g = calc_bar_geometry();
+                if (c->y < g.y) c->y = g.y;
+                if (c->x < g.x) c->x = g.x;
+                if (c->x + c->w > g.x + g.w) c->x = g.x + g.w - c->w;
+                if (c->y + c->h > g.y + g.h) c->y = g.y + g.h - c->h;
+            }
             c->w = fw; c->h = fh;
             moveresizeframe(c);
             int cx, cy, ncw, nch;

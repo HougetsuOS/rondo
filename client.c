@@ -287,8 +287,13 @@ void manage(Window w, XWindowAttributes *wa) {
     for (Client *p = clients; p; p = p->next)
         if (p != c && p->is_floating && p->ws == curws) idx++;
     BarGeometry g = calc_bar_geometry();
-    c->x = g.x + CASCADE_BASE + idx * CASCADE_STEP;
-    c->y = g.y + CASCADE_BASE + idx * CASCADE_STEP;
+    int base_x = g.x + CASCADE_BASE;
+    int base_y = g.y + CASCADE_BASE;
+    int max_x = g.x + g.w - fw;
+    int max_y = g.y + g.h - fh;
+    /* wrap cascade so windows stay within the usable area */
+    c->x = base_x + (idx * CASCADE_STEP) % (max_x > base_x ? max_x - base_x : CASCADE_STEP + 1);
+    c->y = base_y + (idx * CASCADE_STEP) % (max_y > base_y ? max_y - base_y : CASCADE_STEP + 1);
     c->w = fw;
     c->h = fh;
     c->oldx = c->x; c->oldy = c->y; c->oldw = c->w; c->oldh = c->h;
