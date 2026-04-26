@@ -15,6 +15,7 @@ void spawn(const WmArg *arg) {
 }
 
 static void kill_do_close(Client *c) {
+    c->is_closing = 1;
     if (c->delete_window) {
         XEvent ev = { .type = ClientMessage };
         ev.xclient.window = c->win;

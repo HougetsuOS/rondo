@@ -217,8 +217,7 @@ void handle_destroynotify(XDestroyWindowEvent *ev) {
     /* Only match on the client window, not the frame */
     for (Client *c = clients; c; c = c->next) {
         if (c->win == ev->window) {
-            c->is_closing = 1;
-            /* remove from client list and refocus before fading */
+            /* remove from client list */
             if (clients == c) {
                 clients = c->next;
             } else {
@@ -231,7 +230,12 @@ void handle_destroynotify(XDestroyWindowEvent *ev) {
             update_client_list();
             update_active_window();
             updateiconbar();
-            if (fade_enabled && compositor_running) {
+            if (c->is_closing) {
+                /* killclient path: already faded out, just clean up */
+                fade_cancel(c);
+                unmanage_destroyed_cb(c);
+            } else if (fade_enabled && compositor_running) {
+                c->is_closing = 1;
                 fade_window_out(c, unmanage_destroyed_cb);
             } else {
                 unmanage(c, 1);
