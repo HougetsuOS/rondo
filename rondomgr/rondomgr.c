@@ -1268,6 +1268,7 @@ static void push_cfg_to_widgets(void);
 static void read_gui_state(void);
 static void set_option_menu_idx(Widget om, int idx);
 static void rebuild_palette_menu(void);
+static void schedule_palette_rebuild(void);
 
 static void palette_select_cb(Widget w, XtPointer client_data, XtPointer call_data) {
     (void)w; (void)call_data;
@@ -1276,7 +1277,9 @@ static void palette_select_cb(Widget w, XtPointer client_data, XtPointer call_da
     current_palette_idx = idx;
     apply_palette_to_cfg(idx);
     push_cfg_to_widgets();
-    rebuild_palette_menu();
+    /* we are inside this menu's activation callback — defer the rebuild
+     * until the menu has unposted (immediate destroy = BadDrawable crash) */
+    schedule_palette_rebuild();
 }
 
 static void save_ok_cb(Widget dlg_w, XtPointer client, XtPointer call) {
@@ -1365,13 +1368,34 @@ static void delete_palette_cb(Widget w, XtPointer client_data, XtPointer call_da
     rebuild_palette_menu();
 }
 
+/* deferred rebuild flag — rebuilding from inside a menu callback
+ * (while the menu is posted) destroys live widgets under the server's
+ * feet and crashes with BadDrawable in X_ImageText8 */
+static int palette_rebuild_pending = 0;
+
+static void palette_rebuild_timer(XtPointer cl, XtIntervalId *id) {
+    (void)cl; (void)id;
+    palette_rebuild_pending = 0;
+    rebuild_palette_menu();
+}
+
+static void schedule_palette_rebuild(void) {
+    if (palette_rebuild_pending) return;
+    palette_rebuild_pending = 1;
+    XtAppAddTimeOut(app, 0, palette_rebuild_timer, NULL);
+}
+
 static void rebuild_palette_menu(void) {
     if (!w_palette_menu) return;
 
-    /* Destroy the old pulldown menu */
+    /* Destroy the old pulldown menu — detach it from the OptionMenu
+     * first so Motif doesn't try to unpost/redraw the dying shell */
     Widget old_pd = NULL;
     XtVaGetValues(w_palette_menu, XmNsubMenuId, &old_pd, NULL);
-    if (old_pd) XtDestroyWidget(old_pd);
+    if (old_pd) {
+        XtVaSetValues(w_palette_menu, XmNsubMenuId, NULL, NULL);
+        XtDestroyWidget(old_pd);
+    }
 
     /* Create a new pulldown */
     Widget pulldown = XmCreatePulldownMenu(XtParent(w_palette_menu), "pal_pd", NULL, 0);

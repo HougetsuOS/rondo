@@ -31,41 +31,69 @@ void start_bar_timer(void) {
 
 /* Fill buf with the display text for a text widget type.
  * Returns the text length, or 0 on failure.
- * If max_width is true, returns the widest possible text for stable sizing. */
+ * If max_width is true, returns the widest possible text for stable sizing.
+ *
+ * Event-driven draws (defer_flush fires on every focus change) must not
+ * re-read /proc, sysinfo, statvfs, battery sysfs each time — widget data
+ * is refreshed through a short-interval cache gate below. */
+static time_t stats_gate[16];  /* last refresh per widget type */
+
+static int stats_fresh(int type, int interval)
+{
+    time_t now = time(NULL);
+    if (now - stats_gate[type] >= interval) {
+        stats_gate[type] = now;
+        return 0;  /* stale — caller refreshes */
+    }
+    return 1;      /* fresh — caller reuses cached text */
+}
+
 static int widget_text(BarWidgetType type, char *buf, int buflen, int max_width) {
     switch (type) {
     case BAR_WIDGET_LOAD: {
         if (max_width) { snprintf(buf, buflen, " %.2f ", 99.99); return (int)strlen(buf); }
-        double load[1];
-        int n = getloadavg(load, 1);
-        if (n < 1) return 0;
-        snprintf(buf, buflen, " %.2f ", load[0]);
+        static char cache[32];
+        if (!stats_fresh(type, 1) || !cache[0]) {
+            double load[1];
+            int n = getloadavg(load, 1);
+            if (n < 1) return 0;
+            snprintf(cache, sizeof(cache), " %.2f ", load[0]);
+        }
+        snprintf(buf, buflen, "%s", cache);
         return (int)strlen(buf);
     }
     case BAR_WIDGET_MEM: {
         if (max_width) { snprintf(buf, buflen, " 999.9G/999G "); return (int)strlen(buf); }
-        struct sysinfo si;
-        if (sysinfo(&si) < 0) return 0;
-        unsigned long total_mb = si.totalram * si.mem_unit / (1024 * 1024);
-        unsigned long used_mb = (si.totalram - si.freeram) * si.mem_unit / (1024 * 1024);
-        if (total_mb >= 1024)
-            snprintf(buf, buflen, " %.1fG/%.0fG ", used_mb / 1024.0, total_mb / 1024.0);
-        else
-            snprintf(buf, buflen, " %luM/%luM ", used_mb, total_mb);
+        static char cache[32];
+        if (!stats_fresh(type, 1) || !cache[0]) {
+            struct sysinfo si;
+            if (sysinfo(&si) < 0) return 0;
+            unsigned long total_mb = si.totalram * si.mem_unit / (1024 * 1024);
+            unsigned long used_mb = (si.totalram - si.freeram) * si.mem_unit / (1024 * 1024);
+            if (total_mb >= 1024)
+                snprintf(cache, sizeof(cache), " %.1fG/%.0fG ", used_mb / 1024.0, total_mb / 1024.0);
+            else
+                snprintf(cache, sizeof(cache), " %luM/%luM ", used_mb, total_mb);
+        }
+        snprintf(buf, buflen, "%s", cache);
         return (int)strlen(buf);
     }
     case BAR_WIDGET_DISK: {
         if (max_width) { snprintf(buf, buflen, " 999.9T/999.9T "); return (int)strlen(buf); }
-        struct statvfs vfs;
-        if (statvfs("/", &vfs) < 0) return 0;
-        unsigned long long total_bytes = (unsigned long long)vfs.f_blocks * vfs.f_frsize;
-        unsigned long long used_bytes = (unsigned long long)(vfs.f_blocks - vfs.f_bfree) * vfs.f_frsize;
-        double used_gb = used_bytes / (1024.0 * 1024.0 * 1024.0);
-        double total_gb = total_bytes / (1024.0 * 1024.0 * 1024.0);
-        if (total_gb >= 1000.0)
-            snprintf(buf, buflen, " %.1fT/%.1fT ", used_gb / 1000.0, total_gb / 1000.0);
-        else
-            snprintf(buf, buflen, " %.0fG/%.0fG ", used_gb, total_gb);
+        static char cache[32];
+        if (!stats_fresh(type, 10) || !cache[0]) {
+            struct statvfs vfs;
+            if (statvfs("/", &vfs) < 0) return 0;
+            unsigned long long total_bytes = (unsigned long long)vfs.f_blocks * vfs.f_frsize;
+            unsigned long long used_bytes = (unsigned long long)(vfs.f_blocks - vfs.f_bfree) * vfs.f_frsize;
+            double used_gb = used_bytes / (1024.0 * 1024.0 * 1024.0);
+            double total_gb = total_bytes / (1024.0 * 1024.0 * 1024.0);
+            if (total_gb >= 1000.0)
+                snprintf(cache, sizeof(cache), " %.1fT/%.1fT ", used_gb / 1000.0, total_gb / 1000.0);
+            else
+                snprintf(cache, sizeof(cache), " %.0fG/%.0fG ", used_gb, total_gb);
+        }
+        snprintf(buf, buflen, "%s", cache);
         return (int)strlen(buf);
     }
     case BAR_WIDGET_CLOCK: {
@@ -85,105 +113,132 @@ static int widget_text(BarWidgetType type, char *buf, int buflen, int max_width)
     }
     case BAR_WIDGET_BAT: {
         if (max_width) { snprintf(buf, buflen, " 100%% F "); return (int)strlen(buf); }
-        const char *bats[] = { "BAT0", "BAT1", NULL };
-        for (int i = 0; bats[i]; i++) {
-            char path[128];
-            snprintf(path, sizeof(path), "/sys/class/power_supply/%s/capacity", bats[i]);
-            FILE *f = fopen(path, "r");
-            if (!f) continue;
-            int pct = 0;
-            if (fscanf(f, "%d", &pct) != 1) { fclose(f); continue; }
-            fclose(f);
-            snprintf(path, sizeof(path), "/sys/class/power_supply/%s/status", bats[i]);
-            f = fopen(path, "r");
-            char status[32] = "Discharging";
-            if (f) {
-                if (fgets(status, sizeof(status), f)) {
-                    status[strcspn(status, "\n")] = '\0';
-                }
+        static char cache[32];
+        if (!stats_fresh(type, 30) || !cache[0]) {
+            const char *bats[] = { "BAT0", "BAT1", NULL };
+            int have = 0;
+            for (int i = 0; bats[i]; i++) {
+                char path[128];
+                snprintf(path, sizeof(path), "/sys/class/power_supply/%s/capacity", bats[i]);
+                FILE *f = fopen(path, "r");
+                if (!f) continue;
+                int pct = 0;
+                if (fscanf(f, "%d", &pct) != 1) { fclose(f); continue; }
                 fclose(f);
+                snprintf(path, sizeof(path), "/sys/class/power_supply/%s/status", bats[i]);
+                f = fopen(path, "r");
+                char status[32] = "Discharging";
+                if (f) {
+                    if (fgets(status, sizeof(status), f)) {
+                        status[strcspn(status, "\n")] = '\0';
+                    }
+                    fclose(f);
+                }
+                char icon = 'V'; /* discharging ▼ */
+                if (strcmp(status, "Charging") == 0)   icon = '^'; /* ▲ */
+                else if (strcmp(status, "Full") == 0)   icon = 'F'; /* ⏻ */
+                snprintf(cache, sizeof(cache), " %d%% %c ", pct, icon);
+                have = 1;
+                break;
             }
-            char icon = 'V'; /* discharging ▼ */
-            if (strcmp(status, "Charging") == 0)   icon = '^'; /* ▲ */
-            else if (strcmp(status, "Full") == 0)   icon = 'F'; /* ⏻ */
-            snprintf(buf, buflen, " %d%% %c ", pct, icon);
-            return (int)strlen(buf);
+            if (!have) return 0;
         }
-        return 0;
+        snprintf(buf, buflen, "%s", cache);
+        return (int)strlen(buf);
     }
     case BAR_WIDGET_VOL: {
         if (max_width) { snprintf(buf, buflen, " 100%% "); return (int)strlen(buf); }
-        FILE *p = popen("amixer get Master 2>/dev/null", "r");
-        if (!p) return 0;
-        char line[256];
-        int vol = -1, muted = 0;
-        while (fgets(line, sizeof(line), p)) {
-            char *pct = strstr(line, "%]");
-            if (pct) {
-                char *br = strchr(line, '[');
-                if (br) vol = atoi(br + 1);
+        /* TTL cache: popen fork+exec+pipe is far too expensive per redraw */
+        static int cache_vol = -1, cache_muted = 0;
+        static time_t cache_at = 0;
+        time_t now = time(NULL);
+        if (cache_vol < 0 || now - cache_at >= 2) {
+            FILE *p = popen("amixer get Master 2>/dev/null", "r");
+            if (p) {
+                char line[256];
+                int vol = -1, muted = 0;
+                while (fgets(line, sizeof(line), p)) {
+                    char *pct = strstr(line, "%]");
+                    if (pct) {
+                        char *br = strchr(line, '[');
+                        if (br) vol = atoi(br + 1);
+                    }
+                    if (strstr(line, "[off]")) muted = 1;
+                }
+                pclose(p);
+                if (vol >= 0) {
+                    cache_vol = vol;
+                    cache_muted = muted;
+                    cache_at = now;
+                }
             }
-            if (strstr(line, "[off]")) muted = 1;
         }
-        pclose(p);
-        if (vol < 0) return 0;
-        if (muted)
+        if (cache_vol < 0) return 0;
+        if (cache_muted)
             snprintf(buf, buflen, " MUTE ");
         else
-            snprintf(buf, buflen, " %d%% ", vol);
+            snprintf(buf, buflen, " %d%% ", cache_vol);
         return (int)strlen(buf);
     }
     case BAR_WIDGET_CPU: {
         if (max_width) { snprintf(buf, buflen, " CPU 100%% "); return (int)strlen(buf); }
+        static char cache[32];
         static long long prev_idle = 0, prev_total = 0;
-        FILE *f = fopen("/proc/stat", "r");
-        if (!f) return 0;
-        long long user, nice, system, idle, iowait, irq, softirq, steal;
-        if (fscanf(f, "cpu %lld %lld %lld %lld %lld %lld %lld %lld",
-                   &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal) < 8) {
+        if (!stats_fresh(type, 1) || !cache[0]) {
+            FILE *f = fopen("/proc/stat", "r");
+            if (!f) return 0;
+            long long user, nice, system, idle, iowait, irq, softirq, steal;
+            if (fscanf(f, "cpu %lld %lld %lld %lld %lld %lld %lld %lld",
+                       &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal) < 8) {
+                fclose(f);
+                return 0;
+            }
             fclose(f);
-            return 0;
+            long long cur_idle = idle + iowait;
+            long long cur_total = user + nice + system + idle + iowait + irq + softirq + steal;
+            long long d_idle = cur_idle - prev_idle;
+            long long d_total = cur_total - prev_total;
+            prev_idle = cur_idle;
+            prev_total = cur_total;
+            if (d_total == 0) return 0;
+            int pct = (int)((d_total - d_idle) * 100 / d_total);
+            if (pct > 100) pct = 100;
+            snprintf(cache, sizeof(cache), " CPU %d%% ", pct);
         }
-        fclose(f);
-        long long cur_idle = idle + iowait;
-        long long cur_total = user + nice + system + idle + iowait + irq + softirq + steal;
-        long long d_idle = cur_idle - prev_idle;
-        long long d_total = cur_total - prev_total;
-        prev_idle = cur_idle;
-        prev_total = cur_total;
-        if (d_total == 0) return 0;
-        int pct = (int)((d_total - d_idle) * 100 / d_total);
-        if (pct > 100) pct = 100;
-        snprintf(buf, buflen, " CPU %d%% ", pct);
+        snprintf(buf, buflen, "%s", cache);
         return (int)strlen(buf);
     }
     case BAR_WIDGET_NET: {
         if (max_width) { snprintf(buf, buflen, " wwlpxxxxxxxx ^ "); return (int)strlen(buf); }
-        FILE *f = fopen("/proc/net/route", "r");
-        if (!f) return 0;
-        char line[256], iface[32] = "";
-        while (fgets(line, sizeof(line), f)) {
-            char ifname[32];
-            unsigned int dest;
-            if (sscanf(line, "%31s %x", ifname, &dest) == 2 && dest == 0) {
-                strncpy(iface, ifname, sizeof(iface) - 1);
-                iface[sizeof(iface) - 1] = '\0';
-                break;
+        static char cache[64];
+        if (!stats_fresh(type, 5) || !cache[0]) {
+            FILE *f = fopen("/proc/net/route", "r");
+            if (!f) return 0;
+            char line[256], iface[32] = "";
+            while (fgets(line, sizeof(line), f)) {
+                char ifname[32];
+                unsigned int dest;
+                if (sscanf(line, "%31s %x", ifname, &dest) == 2 && dest == 0) {
+                    strncpy(iface, ifname, sizeof(iface) - 1);
+                    iface[sizeof(iface) - 1] = '\0';
+                    break;
+                }
             }
-        }
-        fclose(f);
-        if (iface[0] == '\0') return 0;
-        char path[128];
-        snprintf(path, sizeof(path), "/sys/class/net/%s/operstate", iface);
-        f = fopen(path, "r");
-        int up = 0;
-        if (f) {
-            char state[32];
-            if (fgets(state, sizeof(state), f) && strncmp(state, "up", 2) == 0)
-                up = 1;
             fclose(f);
+            if (iface[0] == '\0') return 0;
+            char path[128];
+            snprintf(path, sizeof(path), "/sys/class/net/%s/operstate", iface);
+            f = fopen(path, "r");
+            int up = 0;
+            if (f) {
+                char state[32];
+                if (fgets(state, sizeof(state), f) && strncmp(state, "up", 2) == 0)
+                    up = 1;
+                fclose(f);
+            }
+            snprintf(cache, sizeof(cache), " %s %c ", iface, up ? '^' : 'V');
         }
-        snprintf(buf, buflen, " %s %c ", iface, up ? '^' : 'V');
+        snprintf(buf, buflen, "%s", cache);
         return (int)strlen(buf);
     }
     case BAR_WIDGET_LAYOUT: {
@@ -192,12 +247,16 @@ static int widget_text(BarWidgetType type, char *buf, int buflen, int max_width)
     }
     case BAR_WIDGET_TEMP: {
         if (max_width) { snprintf(buf, buflen, " 999C "); return (int)strlen(buf); }
-        FILE *f = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
-        if (!f) return 0;
-        int millideg;
-        if (fscanf(f, "%d", &millideg) != 1) { fclose(f); return 0; }
-        fclose(f);
-        snprintf(buf, buflen, " %dC ", millideg / 1000);
+        static char cache[16];
+        if (!stats_fresh(type, 5) || !cache[0]) {
+            FILE *f = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
+            if (!f) return 0;
+            int millideg;
+            if (fscanf(f, "%d", &millideg) != 1) { fclose(f); return 0; }
+            fclose(f);
+            snprintf(cache, sizeof(cache), " %dC ", millideg / 1000);
+        }
+        snprintf(buf, buflen, "%s", cache);
         return (int)strlen(buf);
     }
     default:
@@ -362,8 +421,19 @@ static int draw_bar_widget(BarWidgetType type, int x, int btn_y, int btn_sz,
             if (draw) {
                 char label[12];
                 snprintf(label, sizeof(label), "%d", i + 1);
-                XGlyphInfo ext;
-                XftTextExtents8(dpy, xftfont, (XftChar8 *)label, (int)strlen(label), &ext);
+                /* workspace labels "1".."N" are constant — cache extents */
+                static XGlyphInfo ws_ext[16];
+                static XftFont *ws_ext_font = NULL;
+                if (ws_ext_font != xftfont) {
+                    for (int j = 0; j < NUM_WORKSPACES && j < 16; j++) {
+                        char l[12];
+                        snprintf(l, sizeof(l), "%d", j + 1);
+                        XftTextExtents8(dpy, xftfont, (XftChar8 *)l,
+                                        (int)strlen(l), &ws_ext[j]);
+                    }
+                    ws_ext_font = xftfont;
+                }
+                XGlyphInfo ext = ws_ext[i < 16 ? i : 0];
 
                 XftColor *btn_fill = &col_bar_ws_bg;
                 XftDrawRect(xftdraw, btn_fill, wx, btn_y, btn_sz, btn_sz);
@@ -438,15 +508,30 @@ static int draw_bar_widget(BarWidgetType type, int x, int btn_y, int btn_sz,
         char text[64];
         int len = widget_text(type, text, sizeof(text), !draw);
         if (len <= 0) return 0;
-        /* measure: use max-width; draw: use max-width for box, center real text */
-        char max_text[64];
-        int max_len = widget_text(type, max_text, sizeof(max_text), 1);
-        XGlyphInfo ext, max_ext;
+        /* measure: use max-width; draw: use max-width for box, center real text.
+         * max-width extents are invariant per widget type + font — cache them
+         * (invalidated when the font reloads) instead of re-measuring per call. */
+        static XGlyphInfo max_ext_cache[BAR_WIDGET_TEMP + 1];
+        static int max_ext_valid[BAR_WIDGET_TEMP + 1] = {0};
+        static XftFont *max_ext_font[BAR_WIDGET_TEMP + 1] = {0};
+        XGlyphInfo ext;
+        XGlyphInfo max_ext;
         XftTextExtents8(dpy, xftfont, (XftChar8 *)text, len, &ext);
-        if (max_len > 0)
-            XftTextExtents8(dpy, xftfont, (XftChar8 *)max_text, max_len, &max_ext);
-        else
-            max_ext = ext;
+        if (!max_ext_valid[type] || max_ext_font[type] != xftfont) {
+            char max_text[64];
+            int max_len = widget_text(type, max_text, sizeof(max_text), 1);
+            if (max_len > 0) {
+                XftTextExtents8(dpy, xftfont, (XftChar8 *)max_text, max_len,
+                                &max_ext_cache[type]);
+                max_ext_font[type] = xftfont;
+                max_ext_valid[type] = 1;
+            } else {
+                max_ext_cache[type] = ext;
+                max_ext_font[type] = xftfont;
+                max_ext_valid[type] = 1;
+            }
+        }
+        max_ext = max_ext_cache[type];
         int w = max_ext.xOff + 2;  /* always use max width for stable sizing */
         if (draw) {
             XftDrawRect(xftdraw, &col_bar_ws_bg, x, btn_y, w, btn_sz);
@@ -610,7 +695,7 @@ static void drawbar_horizontal(void) {
                         border_light, border_shadow, 1);
     }
 
-    XSync(dpy, False);
+    XFlush(dpy);
 }
 
 /* Vertical status bar (left or right edge).
@@ -664,8 +749,19 @@ static void drawbar_vertical(void) {
         else
             bevel_rect(xftdraw, btn_x, wy, btn_sz, btn_sz,
                        1, 1, 1, 1, border_light, border_shadow);
-        XGlyphInfo ext;
-        XftTextExtents8(dpy, xftfont, (XftChar8 *)label, (int)strlen(label), &ext);
+        /* cache workspace label extents (same cache as horizontal bar) */
+        static XGlyphInfo wsv_ext[16];
+        static XftFont *wsv_ext_font = NULL;
+        if (wsv_ext_font != xftfont) {
+            for (int j = 0; j < NUM_WORKSPACES && j < 16; j++) {
+                char l[12];
+                snprintf(l, sizeof(l), "%d", j + 1);
+                XftTextExtents8(dpy, xftfont, (XftChar8 *)l,
+                                (int)strlen(l), &wsv_ext[j]);
+            }
+            wsv_ext_font = xftfont;
+        }
+        XGlyphInfo ext = wsv_ext[i < 16 ? i : 0];
         int text_x = btn_x + (btn_sz - ext.xOff) / 2;
         XftDrawStringUtf8(xftdraw, col, xftfont,
                            text_x, wy + (btn_sz + xftfont->ascent - xftfont->descent) / 2,
@@ -782,7 +878,7 @@ static void drawbar_vertical(void) {
             &(XRectangle){ .x = 0, .y = 0, .width = (unsigned short)mon.w, .height = (unsigned short)mon.h }, 1);
     }
 
-    XSync(dpy, False);
+    XFlush(dpy);
 }
 
 /* handle click on status bar — workspace labels */
@@ -849,9 +945,20 @@ void handle_bar_scroll(int x, int y, int button) {
 
 /* ── icon bar (minimized window icons on left side) ─────────────────── */
 
+/* Free the cached scaled icon resources for a client. */
+static void icon_scaled_cache_clear(Client *c) {
+    if (c->icon_scaled_pm)   XFreePixmap(dpy, c->icon_scaled_pm);
+    if (c->icon_scaled_mask) XFreePixmap(dpy, c->icon_scaled_mask);
+    c->icon_scaled_pm = None;
+    c->icon_scaled_mask = None;
+    c->icon_scaled_w = 0;
+    c->icon_scaled_h = 0;
+}
+
 /* Draw an icon pixmap scaled to fit within (dw × dh) at position (dx, dy) on target,
  * preserving aspect ratio and centering. Uses Imlib2 for scaling.
- * Handles the icon mask if present. */
+ * The scaled result (and scaled mask) is cached per client — rebuilt only
+ * when the icon or target size changes, instead of per icon-bar redraw. */
 static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw, int dh) {
     if (!c || c->icon_pixmap == None || c->icon_w <= 0 || c->icon_h <= 0)
         return;
@@ -874,85 +981,134 @@ static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw,
     int ox = dx + (dw - sw) / 2;
     int oy = dy + (dh - sh) / 2;
 
-    imlib_context_set_drawable(c->icon_pixmap);
-    Imlib_Image img = imlib_create_image_from_drawable(0, 0, 0,
-                                                       c->icon_w, c->icon_h, 0);
-    if (!img)
-        return;
+    /* rebuild cache if missing, resized, or the source icon changed */
+    if (c->icon_scaled_w != sw || c->icon_scaled_h != sh) {
+        icon_scaled_cache_clear(c);
+    }
 
-    if (c->icon_mask != None) {
-        /* With mask: create a temp pixmap filled with the bar background,
-         * render the scaled icon onto it, then composite the temp onto
-         * the target using a scaled 1-bit clip mask derived from the
-         * original mask. */
-        Pixmap tmp = XCreatePixmap(dpy, target, (unsigned)sw, (unsigned)sh, 32);
-        XSetForeground(dpy, argb_gc, col_iconbar_bg.pixel);
-        XFillRectangle(dpy, tmp, argb_gc, 0, 0, sw, sh);
-        imlib_context_set_image(img);
-        {
-            Visual *prev_vis = imlib_context_get_visual();
-            Colormap prev_cmap = imlib_context_get_colormap();
-            imlib_context_set_visual(argb_visual);
-            imlib_context_set_colormap(argb_colormap);
-            imlib_context_set_drawable(tmp);
-            imlib_render_image_on_drawable_at_size(0, 0, sw, sh);
-            imlib_context_set_visual(prev_vis);
-            imlib_context_set_colormap(prev_cmap);
-        }
-        imlib_free_image();
+    if (c->icon_scaled_pm == None) {
+        imlib_context_set_drawable(c->icon_pixmap);
+        Imlib_Image img = imlib_create_image_from_drawable(0, 0, 0,
+                                                           c->icon_w, c->icon_h, 0);
+        if (!img)
+            return;
 
-        /* Build a scaled 1-bit clip mask by reading the original mask
-         * pixels, scaling them, and writing to a depth-1 pixmap. */
-        Pixmap scaled_mask = XCreatePixmap(dpy, target, (unsigned)sw, (unsigned)sh, 1);
-        XImage *mask_ximg = XGetImage(dpy, c->icon_mask, 0, 0,
-                                       (unsigned)c->icon_w, (unsigned)c->icon_h,
-                                       AllPlanes, XYPixmap);
-        if (mask_ximg) {
-            GC mono_gc = XCreateGC(dpy, scaled_mask, 0, NULL);
-            XSetForeground(dpy, mono_gc, 0);
-            XFillRectangle(dpy, scaled_mask, mono_gc, 0, 0, sw, sh);
-            /* Sample original mask pixels with nearest-neighbor scaling */
-            for (int sy = 0; sy < sh; sy++) {
-                for (int sx = 0; sx < sw; sx++) {
-                    int src_x = sx * c->icon_w / sw;
-                    int src_y = sy * c->icon_h / sh;
-                    if (XGetPixel(mask_ximg, src_x, src_y)) {
-                        XSetForeground(dpy, mono_gc, 1);
-                        XDrawPoint(dpy, scaled_mask, mono_gc, sx, sy);
+        if (c->icon_mask != None) {
+            /* With mask: render onto a temp pixmap filled with the bar
+             * background, then cache it with a scaled clip mask. */
+            Pixmap tmp = XCreatePixmap(dpy, target, (unsigned)sw, (unsigned)sh, 32);
+            XSetForeground(dpy, argb_gc, col_iconbar_bg.pixel);
+            XFillRectangle(dpy, tmp, argb_gc, 0, 0, sw, sh);
+            imlib_context_set_image(img);
+            {
+                Visual *prev_vis = imlib_context_get_visual();
+                Colormap prev_cmap = imlib_context_get_colormap();
+                imlib_context_set_visual(argb_visual);
+                imlib_context_set_colormap(argb_colormap);
+                imlib_context_set_drawable(tmp);
+                imlib_render_image_on_drawable_at_size(0, 0, sw, sh);
+                imlib_context_set_visual(prev_vis);
+                imlib_context_set_colormap(prev_cmap);
+            }
+            imlib_free_image();
+
+            /* Build a scaled 1-bit clip mask: read the original mask once,
+             * scale client-side, and write rows with XPutImage (single
+             * request instead of per-pixel XDrawPoint). */
+            Pixmap scaled_mask = XCreatePixmap(dpy, target, (unsigned)sw, (unsigned)sh, 1);
+            XImage *mask_ximg = XGetImage(dpy, c->icon_mask, 0, 0,
+                                           (unsigned)c->icon_w, (unsigned)c->icon_h,
+                                           AllPlanes, XYPixmap);
+            char *scaled_bits = malloc((size_t)((sw + 7) / 8) * (size_t)sh);
+            int have_mask_data = 0;
+            if (mask_ximg && scaled_bits) {
+                memset(scaled_bits, 0, (size_t)((sw + 7) / 8) * (size_t)sh);
+                /* Sample original mask pixels with nearest-neighbor scaling.
+                 * Bitmap bit order for clip masks is LSBFirst per byte. */
+                for (int sy = 0; sy < sh; sy++) {
+                    for (int sx = 0; sx < sw; sx++) {
+                        int src_x = sx * c->icon_w / sw;
+                        int src_y = sy * c->icon_h / sh;
+                        if (XGetPixel(mask_ximg, src_x, src_y)) {
+                            scaled_bits[sy * ((sw + 7) / 8) + (sx >> 3)]
+                                |= (char)(1 << (sx & 7));
+                        }
                     }
                 }
+                have_mask_data = 1;
+                XDestroyImage(mask_ximg);
+            }
+            GC mono_gc = XCreateGC(dpy, scaled_mask, 0, NULL);
+            if (have_mask_data) {
+                XImage *out = XCreateImage(dpy, NULL, 1, XYPixmap, 0,
+                                           scaled_bits,
+                                           (unsigned)sw, (unsigned)sh, 8,
+                                           (sw + 7) / 8);
+                if (out) {
+                    out->bitmap_bit_order = LSBFirst;
+                    out->byte_order = LSBFirst;
+                    XPutImage(dpy, scaled_mask, mono_gc, out, 0, 0, 0, 0,
+                              (unsigned)sw, (unsigned)sh);
+                    XDestroyImage(out);  /* frees scaled_bits */
+                    scaled_bits = NULL;
+                }
+            } else {
+                /* Fallback: no mask data, make everything opaque */
+                XSetForeground(dpy, mono_gc, 1);
+                XFillRectangle(dpy, scaled_mask, mono_gc, 0, 0, sw, sh);
             }
             XFreeGC(dpy, mono_gc);
-            XDestroyImage(mask_ximg);
-        } else {
-            /* Fallback: no mask data, make everything opaque */
-            GC mono_gc = XCreateGC(dpy, scaled_mask, 0, NULL);
-            XSetForeground(dpy, mono_gc, 1);
-            XFillRectangle(dpy, scaled_mask, mono_gc, 0, 0, sw, sh);
-            XFreeGC(dpy, mono_gc);
-        }
+            free(scaled_bits);  /* no-op when ownership moved to the XImage */
 
-        XSetClipMask(dpy, argb_gc, scaled_mask);
-        XSetClipOrigin(dpy, argb_gc, ox, oy);
-        XCopyArea(dpy, tmp, target, argb_gc, 0, 0, (unsigned)sw, (unsigned)sh, ox, oy);
-        XSetClipMask(dpy, argb_gc, None);
-        XFreePixmap(dpy, tmp);
-        XFreePixmap(dpy, scaled_mask);
-    } else {
-        /* No mask: render directly to the target drawable */
-        imlib_context_set_image(img);
-        {
-            Visual *prev_vis = imlib_context_get_visual();
-            Colormap prev_cmap = imlib_context_get_colormap();
-            imlib_context_set_visual(argb_visual);
-            imlib_context_set_colormap(argb_colormap);
-            imlib_context_set_drawable(target);
-            imlib_render_image_on_drawable_at_size(ox, oy, sw, sh);
-            imlib_context_set_visual(prev_vis);
-            imlib_context_set_colormap(prev_cmap);
+            /* cache the temp pixmap (with its clip mask) for future draws */
+            c->icon_scaled_pm = tmp;
+            c->icon_scaled_mask = scaled_mask;
+            c->icon_scaled_w = sw;
+            c->icon_scaled_h = sh;
+        } else {
+            /* No mask: cache the scaled render itself */
+            Pixmap cached = XCreatePixmap(dpy, target, (unsigned)sw, (unsigned)sh, 32);
+            imlib_context_set_image(img);
+            {
+                Visual *prev_vis = imlib_context_get_visual();
+                Colormap prev_cmap = imlib_context_get_colormap();
+                imlib_context_set_visual(argb_visual);
+                imlib_context_set_colormap(argb_colormap);
+                imlib_context_set_drawable(cached);
+                imlib_render_image_on_drawable_at_size(0, 0, sw, sh);
+                imlib_context_set_visual(prev_vis);
+                imlib_context_set_colormap(prev_cmap);
+            }
+            imlib_free_image();
+            c->icon_scaled_pm = cached;
+            c->icon_scaled_mask = None;
+            c->icon_scaled_w = sw;
+            c->icon_scaled_h = sh;
         }
-        imlib_free_image();
     }
+
+    /* blit the cached scaled icon to the target */
+    if (c->icon_mask != None) {
+        XSetClipMask(dpy, argb_gc, c->icon_scaled_mask);
+        XSetClipOrigin(dpy, argb_gc, ox, oy);
+        XCopyArea(dpy, c->icon_scaled_pm, target, argb_gc, 0, 0,
+                  (unsigned)sw, (unsigned)sh, ox, oy);
+        XSetClipMask(dpy, argb_gc, None);
+    } else {
+        XCopyArea(dpy, c->icon_scaled_pm, target, argb_gc, 0, 0,
+                  (unsigned)sw, (unsigned)sh, ox, oy);
+    }
+}
+
+
+/* cached per-client name extents (measured when name/font changes) */
+static XGlyphInfo client_name_ext(Client *c) {
+    if (c->name_ext_font != xftfont) {
+        XftTextExtents8(dpy, xftfont, (XftChar8 *)c->name,
+                        (int)strlen(c->name), &c->name_ext);
+        c->name_ext_font = xftfont;
+    }
+    return c->name_ext;
 }
 
 /* height of one icon bar entry, varies by display mode */
@@ -990,15 +1146,12 @@ void drawiconbar(void) {
 }
 
 /* Ensure the icon bar back-buffer pixmap matches the current size.
- * Returns the XftDraw for the back-buffer (creating/recreating as needed). */
+ * Returns the XftDraw for the back-buffer (creating/recreating as needed).
+ * Sizes are tracked locally — no XGetGeometry round trip per draw. */
+static int iconbar_buf_w = 0, iconbar_buf_h = 0;
 static XftDraw *iconbar_ensure_buf(int w, int h) {
     if (iconbar_buf != None && iconbar_buf_draw) {
-        /* check if size still matches */
-        Window _root;
-        int _x, _y;
-        unsigned int bw, bh, _bw, _depth;
-        XGetGeometry(dpy, iconbar_buf, &_root, &_x, &_y, &bw, &bh, &_bw, &_depth);
-        if ((int)bw == w && (int)bh == h)
+        if (iconbar_buf_w == w && iconbar_buf_h == h)
             return iconbar_buf_draw;
         /* size changed — recreate */
         XftDrawDestroy(iconbar_buf_draw);
@@ -1008,6 +1161,8 @@ static XftDraw *iconbar_ensure_buf(int w, int h) {
     }
     iconbar_buf = XCreatePixmap(dpy, iconbar, (unsigned)w, (unsigned)h, 32);
     iconbar_buf_draw = XftDrawCreate(dpy, iconbar_buf, argb_visual, argb_colormap);
+    iconbar_buf_w = w;
+    iconbar_buf_h = h;
     return iconbar_buf_draw;
 }
 
@@ -1070,13 +1225,12 @@ static void drawiconbar_vertical(void) {
     XRectangle clip_rect = { .x = 0, .y = content_top, .width = ICON_W, .height = content_bot - content_top };
     int text_h = xftfont->ascent + xftfont->descent;
 
+    XftDrawSetClipRectangles(xd, 0, 0, &clip_rect, 1);
     for (Client *c = clients; c; c = c->next) {
         if (c->ws != curws || !c->is_minimized) continue;
         int entry_bottom = icon_y + entry_h;
         if (entry_bottom < content_top) { icon_y += entry_h; continue; }
         if (icon_y > content_bot) break;
-
-        XftDrawSetClipRectangles(xd, 0, 0, &clip_rect, 1);
 
         XftColor *fill = (c == focused) ? &col_title_focus : &col_frame_bg;
         XftDrawRect(xd, fill, x + 2, icon_y + 2, ICON_W - 4, entry_h - 4);
@@ -1093,8 +1247,7 @@ static void drawiconbar_vertical(void) {
             break;
         case ICON_MODE_TEXT:
             if (namelen > 0) {
-                XGlyphInfo ext;
-                XftTextExtents8(dpy, xftfont, (XftChar8 *)c->name, namelen, &ext);
+                XGlyphInfo ext = client_name_ext(c);
                 int text_x = x + (ICON_W - ext.xOff) / 2;
                 int text_y = icon_y + (entry_h + text_h) / 2 - xftfont->descent;
                 XftDrawStringUtf8(xd, &col_title_fg, xftfont,
@@ -1105,8 +1258,7 @@ static void drawiconbar_vertical(void) {
         case ICON_MODE_ICON_TEXT:
             draw_icon_scaled(c, buf, x + 4, icon_y + 4, ICON_W - 8, ICON_H - 8);
             if (namelen > 0) {
-                XGlyphInfo ext;
-                XftTextExtents8(dpy, xftfont, (XftChar8 *)c->name, namelen, &ext);
+                XGlyphInfo ext = client_name_ext(c);
                 int text_x = x + (ICON_W - ext.xOff) / 2;
                 int text_y = icon_y + ICON_H + 4 + xftfont->ascent;
                 XftDrawStringUtf8(xd, &col_title_fg, xftfont,
@@ -1116,10 +1268,10 @@ static void drawiconbar_vertical(void) {
             break;
         }
 
-        XftDrawSetClipRectangles(xd, 0, 0,
-            &(XRectangle){ .x = 0, .y = 0, .width = (unsigned short)g.ibar_w, .height = (unsigned short)g.ibar_h }, 1);
         icon_y += entry_h;
     }
+    XftDrawSetClipRectangles(xd, 0, 0,
+        &(XRectangle){ .x = 0, .y = 0, .width = (unsigned short)g.ibar_w, .height = (unsigned short)g.ibar_h }, 1);
 
     /* draw arrow buttons on top of icons so they cover any Imlib2 overflow */
     if (need_up) {
@@ -1151,7 +1303,7 @@ static void drawiconbar_vertical(void) {
 
     /* copy back-buffer to window in one shot */
     XCopyArea(dpy, buf, iconbar, argb_gc, 0, 0, (unsigned)g.ibar_w, (unsigned)g.ibar_h, 0, 0);
-    XSync(dpy, False);
+    XFlush(dpy);
 }
 
 /* Horizontal icon bar (top or bottom edge) — icons laid out left-to-right */
@@ -1207,13 +1359,12 @@ static void drawiconbar_horizontal(void) {
     XRectangle clip_rect = { .x = content_left, .y = 0, .width = content_right - content_left, .height = entry_h };
     int text_h = xftfont->ascent + xftfont->descent;
 
+    XftDrawSetClipRectangles(xd, 0, 0, &clip_rect, 1);
     for (Client *c = clients; c; c = c->next) {
         if (c->ws != curws || !c->is_minimized) continue;
         int entry_right = icon_x + ICON_W;
         if (entry_right < content_left) { icon_x += ICON_W; continue; }
         if (icon_x > content_right) break;
-
-        XftDrawSetClipRectangles(xd, 0, 0, &clip_rect, 1);
 
         XftColor *fill = (c == focused) ? &col_title_focus : &col_frame_bg;
         XftDrawRect(xd, fill, icon_x + 2, 2, ICON_W - 4, entry_h - 4);
@@ -1230,8 +1381,7 @@ static void drawiconbar_horizontal(void) {
             break;
         case ICON_MODE_TEXT:
             if (namelen > 0) {
-                XGlyphInfo ext;
-                XftTextExtents8(dpy, xftfont, (XftChar8 *)c->name, namelen, &ext);
+                XGlyphInfo ext = client_name_ext(c);
                 int text_x = icon_x + (ICON_W - ext.xOff) / 2;
                 int text_y = (entry_h + text_h) / 2 - xftfont->descent;
                 XftDrawStringUtf8(xd, &col_title_fg, xftfont,
@@ -1242,8 +1392,7 @@ static void drawiconbar_horizontal(void) {
         case ICON_MODE_ICON_TEXT:
             draw_icon_scaled(c, buf, icon_x + 4, 4, ICON_W - 8, ICON_H - 8);
             if (namelen > 0) {
-                XGlyphInfo ext;
-                XftTextExtents8(dpy, xftfont, (XftChar8 *)c->name, namelen, &ext);
+                XGlyphInfo ext = client_name_ext(c);
                 int text_x = icon_x + (ICON_W - ext.xOff) / 2;
                 int text_y = entry_h - xftfont->descent - 2;
                 XftDrawStringUtf8(xd, &col_title_fg, xftfont,
@@ -1253,10 +1402,10 @@ static void drawiconbar_horizontal(void) {
             break;
         }
 
-        XftDrawSetClipRectangles(xd, 0, 0,
-            &(XRectangle){ .x = 0, .y = 0, .width = (unsigned short)g.ibar_w, .height = (unsigned short)g.ibar_h }, 1);
         icon_x += ICON_W;
     }
+    XftDrawSetClipRectangles(xd, 0, 0,
+        &(XRectangle){ .x = 0, .y = 0, .width = (unsigned short)g.ibar_w, .height = (unsigned short)g.ibar_h }, 1);
 
     /* draw arrow buttons on top of icons so they cover any Imlib2 overflow */
     if (need_left) {
@@ -1288,7 +1437,7 @@ static void drawiconbar_horizontal(void) {
 
     /* copy back-buffer to window in one shot */
     XCopyArea(dpy, buf, iconbar, argb_gc, 0, 0, (unsigned)g.ibar_w, (unsigned)g.ibar_h, 0, 0);
-    XSync(dpy, False);
+    XFlush(dpy);
 }
 
 void updateiconbar(void) {
@@ -1301,14 +1450,13 @@ void updateiconbar(void) {
         /* raise status bar above icon bar so it covers the overlapping corner */
         if (show_bar)
             XRaiseWindow(dpy, barwin);
-        XSync(dpy, False);
+        XFlush(dpy);
         drawiconbar();
     } else {
         XUnmapWindow(dpy, iconbar);
     }
-    arrange();
-    if (show_bar)
-        drawbar();
+    /* NOTE: arrange()/drawbar() are not called here — callers
+     * (defer_flush, workspace switches) own that pass. */
 }
 
 void handle_iconbar_click(int x, int y) {
@@ -1505,6 +1653,10 @@ static XtIntervalId tooltip_timer = 0;
 char tooltip_text[256];
 int tooltip_text_len = 0;
 
+/* tooltip visibility flag — shared between render/hide to skip redundant
+ * unmap requests on every motion event */
+int tooltip_shown = 0;
+
 static void tooltip_render(void) {
     if (tooltip_text_len <= 0) return;
     XGlyphInfo ext;
@@ -1529,6 +1681,7 @@ static void tooltip_render(void) {
                       (unsigned)(tw > 1 ? tw : 1),
                       (unsigned)(th > 1 ? th : 1));
     XMapRaised(dpy, tooltip_win);
+    tooltip_shown = 1;
 }
 
 static void tooltip_timer_cb(XtPointer data, XtIntervalId *id) {
@@ -1561,5 +1714,10 @@ void hide_icon_tooltip(void) {
         XtRemoveTimeOut(tooltip_timer);
         tooltip_timer = 0;
     }
-    XUnmapWindow(dpy, tooltip_win);
+    /* skip the unmap request when already hidden — this runs on every
+     * motion event over the iconbar */
+    if (tooltip_shown) {
+        XUnmapWindow(dpy, tooltip_win);
+        tooltip_shown = 0;
+    }
 }

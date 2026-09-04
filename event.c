@@ -11,56 +11,55 @@ int handle_buttonpress(XButtonEvent *ev) {
         return 1;
     }
 
-    /* Alt+click on root — find topmost client under cursor */
+    /* Alt+click on root — geometric hit-test against cached client frame
+     * geometry, then pick the topmost match by REAL stacking order.
+     * (Client-list order is manage order, not stacking order — a raised
+     * older window must win over a newer window beneath it. XQueryTree
+     * returns children bottom-to-top; one round trip per click is fine.) */
     if (ev->window == root) {
-        Window child;
-        int wx, wy;
-        unsigned int mask;
-        XQueryPointer(dpy, root, &child, &child, &wx, &wy, &wx, &wy, &mask);
-        /* child is the topmost window under cursor — find its client */
+        /* fetch stacking order (bottom → top) */
+        Window stack[64];
+        Window *stack_dyn = NULL;
+        Window *order = stack;
+        unsigned int norder = 0;
+        {
+            Window dum_r, dum_p, *kids = NULL;
+            unsigned int nk = 0;
+            if (XQueryTree(dpy, root, &dum_r, &dum_p, &kids, &nk) && kids) {
+                if (nk <= 64) {
+                    memcpy(stack, kids, sizeof(Window) * nk);
+                    order = stack;
+                } else {
+                    stack_dyn = kids;  /* reuse the XQueryTree allocation */
+                    order = stack_dyn;
+                }
+                norder = nk;
+            }
+            if (kids != stack_dyn && kids)
+                XFree(kids);
+        }
         Client *c = NULL;
-        if (child != None) {
-            /* Walk up from child to find which frame it belongs to */
-            for (Client *t = clients; t; t = t->next) {
-                if (t->ws != curws || t->is_minimized) continue;
-                if (child == XtWindow(t->frame_shell) ||
-                    child == XtWindow(t->frame_form) ||
-                    child == t->win) {
-                    c = t;
-                    break;
-                }
-            }
-            /* If child is a subwindow (e.g., reparented client content),
-             * walk the parent tree to find the frame */
-            if (!c) {
-                Window root_ret, parent;
-                Window *children;
-                unsigned int nchildren;
-                Window w = child;
-                while (XQueryTree(dpy, w, &root_ret, &parent, &children, &nchildren)) {
-                    XFree(children);
-                    if (parent == root) break;
-                    for (Client *t = clients; t; t = t->next) {
-                        if (t->ws != curws || t->is_minimized) continue;
-                        if (parent == XtWindow(t->frame_shell)) {
-                            c = t;
-                            goto found;
-                        }
+        int best_rank = -1;  /* position in stacking order; higher = topmost */
+        for (Client *t = clients; t; t = t->next) {
+            if (t->ws != curws || t->is_minimized) continue;
+            if (ev->x_root >= t->x && ev->x_root < t->x + t->w &&
+                ev->y_root >= t->y && ev->y_root < t->y + t->h) {
+                /* rank = index of the client's frame in the stack list */
+                int rank = -1;
+                for (unsigned int i = 0; i < norder; i++) {
+                    if (order[i] == XtWindow(t->frame_shell)) {
+                        rank = (int)i;
+                        break;
                     }
-                    w = parent;
                 }
-            }
-        }
-        found:
-        /* Fallback: if XQueryPointer didn't find a window, check geometry */
-        if (!c) {
-            for (Client *t = clients; t; t = t->next) {
-                if (t->ws != curws || t->is_minimized) continue;
-                if (wx >= t->x && wx < t->x + t->w && wy >= t->y && wy < t->y + t->h) {
+                /* windows not found in the stack (shouldn't happen) rank lowest */
+                if (rank > best_rank) {
+                    best_rank = rank;
                     c = t;
                 }
             }
         }
+        free(stack_dyn);
         if (c && (ev->button == Button1 || ev->button == Button3)) {
             XRaiseWindow(dpy, XtWindow(c->frame_shell));
             focus(c);
@@ -151,6 +150,10 @@ void handle_configurenotify(XConfigureEvent *ev) {
     if (show_bar)
         XMapWindow(dpy, barwin);
     updateiconbar();
+    /* screen size changed — the tiling area must be recomputed
+     * (updateiconbar no longer arranges as a side effect) */
+    arrange();
+    defer_schedule();
 }
 
 void handle_configurerequest(XConfigureRequestEvent *ev) {
@@ -235,9 +238,6 @@ void handle_destroynotify(XDestroyWindowEvent *ev) {
             }
             if (focused == c)
                 focus(nexttiled(clients));
-            update_client_list();
-            update_active_window();
-            updateiconbar();
             if (c->is_closing) {
                 /* killclient path: already faded out, just clean up */
                 fade_cancel(c);
@@ -284,8 +284,19 @@ void handle_unmapnotify(XUnmapEvent *ev) {
     /* Ignore unmap from intentional minimize or workspace hide */
     if (c->is_minimized || c->is_hidden) return;
     /* Accept unmap from the frame form window or root */
-    if (ev->event == XtWindow(c->frame_form) || ev->event == root)
+    if (ev->event == XtWindow(c->frame_form) || ev->event == root) {
+        /* stale UnmapNotify guard: events queued by a previous WM's
+         * handover reparent (window was reparented away, not withdrawn)
+         * arrive after we adopted the client. A genuine withdraw has the
+         * client window actually unmapped at delivery time; a reparent
+         * leaves it mapped. One XGetWindowAttributes per unmap is fine —
+         * unmaps are rare, and the wrong unmanage tears down a live app. */
+        XWindowAttributes wa;
+        if (XGetWindowAttributes(dpy, ev->window, &wa) &&
+            wa.map_state != IsUnmapped)
+            return;  /* still mapped — stale/structural, not a withdraw */
         unmanage(c, 0);
+    }
 }
 
 /* ── main event loop ────────────────────────────────────────────────── */
@@ -359,11 +370,13 @@ void run(void) {
             case KeyPress:         handle_keypress(&ev.xkey);                       break;
             case MapRequest:       handle_maprequest(&ev.xmaprequest);              break;
             case MapNotify:
-                compositor_repaint();
+                compositor_map_window(ev.xmap.window);
+                defer_schedule();
                 break;
             case UnmapNotify:
                 handle_unmapnotify(&ev.xunmap);
-                compositor_repaint();
+                compositor_unmap_window(ev.xunmap.window);
+                defer_schedule();
                 break;
             case Expose:
                 if (ev.xexpose.window == tooltip_win && ev.xexpose.count == 0) {
@@ -389,7 +402,7 @@ void run(void) {
                     Client *c = wintoclient(ev.xexpose.window);
                     if (c) {
                         drawframe(c);
-                        compositor_repaint();
+                        defer_schedule();
                     }
                 }
                 break;
@@ -397,9 +410,7 @@ void run(void) {
                 if (ev.xproperty.state == PropertyNewValue) {
                     Client *c = wintoclient(ev.xproperty.window);
                     if (c) {
-                        static Atom wm_name = None;
-                        if (!wm_name) wm_name = XInternAtom(dpy, "WM_NAME", False);
-                        if (ev.xproperty.atom == wm_name ||
+                        if (ev.xproperty.atom == XA_WM_NAME ||
                             ev.xproperty.atom == net_wm_name_atom) {
                             updatewindowname(c);
                             updateframe(c);
@@ -409,6 +420,8 @@ void run(void) {
                         } else if (ev.xproperty.atom == XA_WM_HINTS) {
                             XWMHints *hints = XGetWMHints(dpy, c->win);
                             if (hints) {
+                                Pixmap old_pm = c->icon_pixmap;
+                                Pixmap old_mask = c->icon_mask;
                                 if (hints->flags & InputHint)
                                     c->input_hint = hints->input;
                                 if (hints->flags & IconPixmapHint)
@@ -423,10 +436,23 @@ void run(void) {
                                     c->icon_window = hints->icon_window;
                                 else
                                     c->icon_window = None;
+                                /* icon changed — drop the scaled-icon cache */
+                                if (c->icon_pixmap != old_pm ||
+                                    c->icon_mask != old_mask) {
+                                    if (c->icon_scaled_pm)   XFreePixmap(dpy, c->icon_scaled_pm);
+                                    if (c->icon_scaled_mask) XFreePixmap(dpy, c->icon_scaled_mask);
+                                    c->icon_scaled_pm = None;
+                                    c->icon_scaled_mask = None;
+                                    c->icon_scaled_w = 0;
+                                    c->icon_scaled_h = 0;
+                                }
                                 XFree(hints);
                             }
                         } else if (ev.xproperty.atom == wm_normal_hints) {
                             read_size_hints(c);
+                        } else if (ev.xproperty.atom == net_wm_window_opacity) {
+                            compositor_opacity_changed(c->win);
+                            compositor_opacity_changed(XtWindow(c->frame_shell));
                         } else if (ev.xproperty.atom == wm_colormap_windows) {
                             /* read WM_COLORMAP_WINDOWS — use first colormap */
                             Atom actual_type;

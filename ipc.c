@@ -8,6 +8,7 @@
 
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
 
@@ -120,6 +121,11 @@ static void ipc_accept_cb(XtPointer data, int *fd, XtInputId *id)
     socklen_t len = sizeof(addr);
     int cfd = accept(*fd, (struct sockaddr *)&addr, &len);
     if (cfd < 0) return;
+
+    /* accepted sockets do NOT inherit O_NONBLOCK from the listener —
+     * a stalling peer could block the entire WM event loop */
+    int fl = fcntl(cfd, F_GETFL, 0);
+    if (fl >= 0) fcntl(cfd, F_SETFL, fl | O_NONBLOCK);
 
     int slot = -1;
     for (int i = 0; i < IPC_MAX_CLIENTS; i++) {

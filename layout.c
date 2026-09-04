@@ -20,13 +20,20 @@ static void apply_size_hints_tiled(Client *c, int *w, int *h) {
 }
 
 /* Place a single tiled client at (x,y) with size (w,h),
- * applying size hints and repositioning the X windows. */
+ * applying size hints and repositioning the X windows.
+ * Skips all X traffic when the computed geometry is unchanged —
+ * arrange() runs on every focus change, so this matters a lot. */
 static void place_client(Client *c, int x, int y, int w, int h) {
-    c->x = x; c->y = y; c->w = w; c->h = h;
     int cx, cy, cw, ch;
-    frame_to_client(c->w, c->h, &cx, &cy, &cw, &ch, c->no_decor);
+    frame_to_client(w, h, &cx, &cy, &cw, &ch, c->no_decor);
     apply_size_hints_tiled(c, &cw, &ch);
-    client_to_frame(cw, ch, &c->w, &c->h, c->no_decor);
+    int fw, fh;
+    client_to_frame(cw, ch, &fw, &fh, c->no_decor);
+
+    if (c->x == x && c->y == y && c->w == fw && c->h == fh)
+        return;  /* geometry unchanged — nothing to do */
+
+    c->x = x; c->y = y; c->w = fw; c->h = fh;
     moveresizeframe(c);
     frame_to_client(c->w, c->h, &cx, &cy, &cw, &ch, c->no_decor);
     XMoveResizeWindow(dpy, c->win, cx, cy, cw, ch);
@@ -57,14 +64,15 @@ static void arrange_master_stack(void) {
 
     place_client(c, mx, my, master_w, mh);
 
-    /* stack area */
+    /* stack area — precompute the remaining window count once so the
+     * loop is O(N) instead of recounting for every stack window */
     c = nexttiled(c->next);
     int sy = my;
+    int windows_left = 0;
+    for (Client *t = c; t; t = nexttiled(t->next)) windows_left++;
 
-    for (; c; c = nexttiled(c->next)) {
+    for (; c && windows_left > 0; c = nexttiled(c->next), windows_left--) {
         int remaining = mh - (sy - my);
-        int windows_left = 0;
-        for (Client *t = c; t; t = nexttiled(t->next)) windows_left++;
         int h = remaining / windows_left;
 
         place_client(c, mx + master_w, sy, stack_w, h);

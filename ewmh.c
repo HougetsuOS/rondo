@@ -4,16 +4,21 @@
 #include "wm.h"
 
 void update_client_list(void) {
+    /* stack buffer for typical client counts — avoids malloc/free churn */
+    Window stack_buf[128] = {0};
     int n = 0;
     for (Client *c = clients; c; c = c->next) n++;
-    Window *wins = malloc(sizeof(Window) * (size_t)(n > 0 ? n : 1));
-    if (!wins) return;
+    Window *wins = stack_buf;
+    if (n > 128) {
+        wins = malloc(sizeof(Window) * (size_t)n);
+        if (!wins) return;
+    }
     int i = 0;
     for (Client *c = clients; c; c = c->next)
         wins[i++] = c->win;
     XChangeProperty(dpy, root, net_client_list, XA_WINDOW, 32,
                     PropModeReplace, (unsigned char *)wins, n);
-    free(wins);
+    if (wins != stack_buf) free(wins);
 }
 
 void update_active_window(void) {

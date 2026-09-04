@@ -6,11 +6,71 @@
 
 /* ── client helpers ─────────────────────────────────────────────────── */
 
-Client *wintoclient(Window w) {
+/* Window→Client hash: every event that needs a client lookup goes through
+ * wintoclient, so the O(N) list scan is replaced with O(1) probes.
+ * Each client registers its client window, frame shell window and
+ * frame form window. */
+#define WC_HASH_BITS 10
+#define WC_HASH_SIZE (1 << WC_HASH_BITS)
+#define WC_SENTINEL  0x1  /* mark deleted slots (open addressing) */
+
+typedef struct { Window win; Client *c; } WcEntry;
+static WcEntry wc_table[WC_HASH_SIZE];
+static int wc_count = 0;
+
+static unsigned int wc_hash(Window w) {
+    unsigned int h = (unsigned int)(w ^ (w >> 16));
+    h *= 2654435761u;
+    return (h >> (32 - WC_HASH_BITS)) & (WC_HASH_SIZE - 1);
+}
+
+static void wc_insert(Window w, Client *c) {
+    unsigned int i = wc_hash(w);
+    while (wc_table[i].win && wc_table[i].win != WC_SENTINEL)
+        i = (i + 1) & (WC_HASH_SIZE - 1);
+    wc_table[i].win = w;
+    wc_table[i].c = c;
+    wc_count++;
+}
+
+static void wc_remove(Window w) {
+    unsigned int i = wc_hash(w);
+    while (wc_table[i].win) {
+        if (wc_table[i].win == w) {
+            wc_table[i].win = WC_SENTINEL;
+            wc_table[i].c = NULL;
+            wc_count--;
+            return;
+        }
+        i = (i + 1) & (WC_HASH_SIZE - 1);
+    }
+}
+
+static void wc_rehash(void) {
+    memset(wc_table, 0, sizeof(wc_table));
+    wc_count = 0;
     for (Client *c = clients; c; c = c->next) {
-        if (c->win == w) return c;
-        if (XtWindow(c->frame_shell) == w) return c;
-        if (XtWindow(c->frame_form) == w) return c;
+        if (c->win) wc_insert(c->win, c);
+        if (c->frame_shell) wc_insert(XtWindow(c->frame_shell), c);
+        if (c->frame_form)  wc_insert(XtWindow(c->frame_form), c);
+    }
+}
+
+Client *wintoclient(Window w) {
+    if (!w) return NULL;
+    /* rebuild lazily after bulk changes (reload etc.) */
+    if (wc_count < 0) wc_rehash();
+    unsigned int i = wc_hash(w);
+    while (wc_table[i].win) {
+        if (wc_table[i].win == w) return wc_table[i].c;
+        i = (i + 1) & (WC_HASH_SIZE - 1);
+    }
+    /* not found — fall back to a full scan and refresh the table;
+     * handles widgets realized after registration (rare) */
+    for (Client *c = clients; c; c = c->next) {
+        if (c->win == w) { wc_insert(c->win, c); return c; }
+        if (c->frame_shell && XtWindow(c->frame_shell) == w) { wc_insert(w, c); return c; }
+        if (c->frame_form && XtWindow(c->frame_form) == w)   { wc_insert(w, c); return c; }
     }
     return NULL;
 }
@@ -32,18 +92,26 @@ int tiledcount(void) {
 
 void updatewindowname(Client *c) {
     XTextProperty prop;
+    char newname[sizeof(c->name)];
+    newname[0] = '\0';
     /* Try _NET_WM_NAME (UTF-8) first */
     if (XGetTextProperty(dpy, c->win, &prop, net_wm_name_atom) && prop.value) {
-        strncpy(c->name, (char *)prop.value, sizeof(c->name) - 1);
-        c->name[sizeof(c->name) - 1] = '\0';
+        strncpy(newname, (char *)prop.value, sizeof(newname) - 1);
+        newname[sizeof(newname) - 1] = '\0';
         XFree(prop.value);
     } else if (XGetWMName(dpy, c->win, &prop) && prop.value) {
-        strncpy(c->name, (char *)prop.value, sizeof(c->name) - 1);
-        c->name[sizeof(c->name) - 1] = '\0';
+        strncpy(newname, (char *)prop.value, sizeof(newname) - 1);
+        newname[sizeof(newname) - 1] = '\0';
         XFree(prop.value);
-    } else {
-        c->name[0] = '\0';
     }
+    /* skip redraw when the title is unchanged — chatty apps rewrite
+     * WM_NAME constantly (progress, cwd, etc.) */
+    if (strcmp(newname, c->name) == 0)
+        return;
+    strncpy(c->name, newname, sizeof(c->name) - 1);
+    c->name[sizeof(c->name) - 1] = '\0';
+    /* invalidate cached name extents */
+    c->name_ext_font = NULL;
 }
 
 /* ── ICCCM helpers ────────────────────────────────────────────────────── */
@@ -67,17 +135,16 @@ void set_wm_state(Client *c, int state) {
 }
 
 void send_configure_notify(Client *c) {
-    Window child;
-    int cx_root, cy_root;
-    XTranslateCoordinates(dpy, c->win, root, 0, 0, &cx_root, &cy_root, &child);
+    /* client window sits at a fixed offset inside the frame — compute
+     * root coordinates arithmetically (no XTranslateCoordinates round trip) */
     int cx, cy, cw, ch;
     frame_to_client(c->w, c->h, &cx, &cy, &cw, &ch, c->no_decor);
     XConfigureEvent ce = {
         .type          = ConfigureNotify,
         .event         = c->win,
         .window        = c->win,
-        .x             = cx_root,
-        .y             = cy_root,
+        .x             = c->x + cx,
+        .y             = c->y + cy,
         .width         = cw,
         .height        = ch,
         .border_width  = 0,
@@ -170,7 +237,7 @@ static void minimize_do_unmap(Client *c) {
     XtUnmapWidget(c->frame_shell);
     if (focused == c) focus(nexttiled(clients));
     iconbar_scroll = 0;
-    updateiconbar();
+    defer_schedule();
 }
 
 void minimize_client(Client *c) {
@@ -190,7 +257,6 @@ void restore_client(Client *c) {
     XtMapWidget(c->frame_shell);
     fade_window_in(c);
     focus(c);
-    updateiconbar();
 }
 
 /* ── floating geometry ───────────────────────────────────────────────── */
@@ -240,13 +306,52 @@ void focus(Client *c) {
         XInstallColormap(dpy, c->cmap);
     update_active_window();
     updateframe(c);
-    drawbar();
+    defer_schedule();
 }
 
 /* ── manage / unmanage ──────────────────────────────────────────────── */
 
+/* window-type flags set at the top of manage() before widgets are built */
+static int wtype_dialog, wtype_splash;
+
 void manage(Window w, XWindowAttributes *wa) {
     if (wintoclient(w)) return;
+
+    /* check _NET_WM_WINDOW_TYPE FIRST — skip unmanaged types before
+     * creating any widgets/windows (was previously done after the frame
+     * was built, leaking the frame on early return) */
+    {
+        Atom actual_type;
+        int actual_format;
+        unsigned long nitems, bytes_after;
+        unsigned char *data = NULL;
+        int is_dialog = 0, is_splash = 0;
+        if (XGetWindowProperty(dpy, w, net_wm_window_type, 0, 1024, False,
+                               XA_ATOM, &actual_type, &actual_format,
+                               &nitems, &bytes_after, &data) == Success && data) {
+            Atom *atoms = (Atom *)data;
+            for (unsigned long i = 0; i < nitems; i++) {
+                if (atoms[i] == net_wm_window_type_dock ||
+                    atoms[i] == net_wm_window_type_toolbar ||
+                    atoms[i] == net_wm_window_type_utility ||
+                    atoms[i] == net_wm_window_type_popup_menu ||
+                    atoms[i] == net_wm_window_type_dropdown_menu ||
+                    atoms[i] == net_wm_window_type_tooltip ||
+                    atoms[i] == net_wm_window_type_notification) {
+                    XFree(data);
+                    return; /* don't manage these window types */
+                }
+                if (atoms[i] == net_wm_window_type_dialog)
+                    is_dialog = 1;
+                if (atoms[i] == net_wm_window_type_splash)
+                    is_splash = 1;
+            }
+            XFree(data);
+        }
+        if (is_splash) is_dialog = 1;
+        wtype_dialog = is_dialog;
+        wtype_splash = is_splash;
+    }
 
     Client *c = calloc(1, sizeof(Client));
     if (!c) die("rondo: out of memory\n");
@@ -408,43 +513,30 @@ void manage(Window w, XWindowAttributes *wa) {
     /* read client colormap */
     c->cmap = wa->colormap;
 
-    /* read ICCCM protocols and size hints */
-    c->take_focus = client_supports_protocol(c, wm_take_focus);
-    c->delete_window = client_supports_protocol(c, wm_delete_window);
+    /* read ICCCM protocols and size hints — one XGetWMProtocols fetch
+     * covers both take_focus and delete_window */
+    {
+        Atom *protocols;
+        int count;
+        c->take_focus = 0;
+        c->delete_window = 0;
+        if (XGetWMProtocols(dpy, c->win, &protocols, &count)) {
+            for (int i = 0; i < count; i++) {
+                if (protocols[i] == wm_take_focus)   c->take_focus = 1;
+                if (protocols[i] == wm_delete_window) c->delete_window = 1;
+            }
+            XFree(protocols);
+        }
+    }
     read_size_hints(c);
 
-    /* check _NET_WM_WINDOW_TYPE — skip unmanaged types, float dialogs/splash */
-    {
-        Atom actual_type;
-        int actual_format;
-        unsigned long nitems, bytes_after;
-        unsigned char *data = NULL;
-        if (XGetWindowProperty(dpy, w, net_wm_window_type, 0, 1024, False,
-                               XA_ATOM, &actual_type, &actual_format,
-                               &nitems, &bytes_after, &data) == Success && data) {
-            Atom *atoms = (Atom *)data;
-            for (unsigned long i = 0; i < nitems; i++) {
-                if (atoms[i] == net_wm_window_type_dock ||
-                    atoms[i] == net_wm_window_type_toolbar ||
-                    atoms[i] == net_wm_window_type_utility ||
-                    atoms[i] == net_wm_window_type_popup_menu ||
-                    atoms[i] == net_wm_window_type_dropdown_menu ||
-                    atoms[i] == net_wm_window_type_tooltip ||
-                    atoms[i] == net_wm_window_type_notification) {
-                    XFree(data);
-                    free(c);
-                    return; /* don't manage these window types */
-                }
-                if (atoms[i] == net_wm_window_type_dialog)
-                    c->is_floating = 1;
-                if (atoms[i] == net_wm_window_type_splash) {
-                    c->is_floating = 1;
-                    c->no_decor = 1;
-                    c->no_resize = 1;
-                }
-            }
-            XFree(data);
-        }
+    /* apply window-type flags determined at the top of manage() */
+    if (wtype_dialog)
+        c->is_floating = 1;
+    if (wtype_splash) {
+        c->is_floating = 1;
+        c->no_decor = 1;
+        c->no_resize = 1;
     }
 
     /* read _MOTIF_WM_HINTS — decorations and functions */
@@ -478,6 +570,9 @@ void manage(Window w, XWindowAttributes *wa) {
     /* prepend to list */
     c->next = clients;
     clients = c;
+    wc_insert(c->win, c);
+    wc_insert(XtWindow(c->frame_shell), c);
+    wc_insert(XtWindow(c->frame_form), c);
 
     /* set _NET_WM_DESKTOP on client window */
     long desktop = c->ws;
@@ -485,12 +580,11 @@ void manage(Window w, XWindowAttributes *wa) {
                     PropModeReplace, (unsigned char *)&desktop, 1);
 
     /* update EWMH client list */
-    update_client_list();
+    defer_schedule();
 
     if (c->is_minimized) {
         set_wm_state(c, IconicState);
         /* don't map — client starts minimized */
-        updateiconbar();
     } else if (c->ws == curws) {
         set_wm_state(c, NormalState);
         if (fade_enabled)
@@ -501,6 +595,13 @@ void manage(Window w, XWindowAttributes *wa) {
         XSetWindowBackgroundPixmap(dpy, XtWindow(c->frame_form), None);
         XtPopup(c->frame_shell, XtGrabNone);
         XMapWindow(dpy, w);
+        /* discard stale UnmapNotify/ReparentNotify queued before we took
+         * over (e.g. from a previous WM's handover) — otherwise the stale
+         * UnmapNotify unmanages the freshly adopted client */
+        {
+            XEvent discard;
+            while (XCheckTypedWindowEvent(dpy, w, UnmapNotify, &discard)) { }
+        }
         compositor_manage_client(c);
         fade_window_in(c);
         if (c->is_floating) {
@@ -509,9 +610,8 @@ void manage(Window w, XWindowAttributes *wa) {
         }
         if (!c->is_floating)
             btree_add(c);
-        arrange();
+        defer_schedule();
         updateframe(c);
-        drawbar();
         focus(c);
     } else {
         set_wm_state(c, IconicState);
@@ -531,14 +631,19 @@ void unmanage_destroyed_cb(Client *c) {
         XftDrawDestroy(c->frame_draw);
         c->frame_draw = NULL;
     }
+    wc_remove(c->win);
+    wc_remove(XtWindow(c->frame_shell));
+    wc_remove(XtWindow(c->frame_form));
     XtDestroyWidget(c->frame_shell);
     free(c);
-    arrange();
-    updateiconbar();
+    defer_schedule();
 }
 
 void unmanage(Client *c, int destroyed) {
     if (!c) return;
+    /* free cached scaled icon pixmaps */
+    if (c->icon_scaled_pm)   XFreePixmap(dpy, c->icon_scaled_pm);
+    if (c->icon_scaled_mask) XFreePixmap(dpy, c->icon_scaled_mask);
     /* cancel any in-progress fade */
     if (c->fade_timer) {
         XtRemoveTimeOut(c->fade_timer);
@@ -560,8 +665,28 @@ void unmanage(Client *c, int destroyed) {
     if (focused == c)
         focus(nexttiled(clients));
     /* Update EWMH client list and active window */
-    update_client_list();
     update_active_window();
+    /* wm_restarting: hand the window over to the next WM instance —
+     * reparent to root (otherwise destroying the frame would destroy the
+     * client too — XDestroyWindow takes the whole subtree) but keep it
+     * MAPPED and with WM_STATE intact so the startup scan adopts it into
+     * a fresh frame seamlessly. Destroy the frame X window DIRECTLY —
+     * XtDestroyWidget only queues destruction for the next event loop
+     * pass, which never runs during a restart, leaking the frame as an
+     * override-redirect orphan that blocks the next WM. */
+    if (wm_restarting) {
+        if (c->frame_draw) {
+            XftDrawDestroy(c->frame_draw);
+            c->frame_draw = NULL;
+        }
+        XReparentWindow(dpy, c->win, root, c->x, c->y);
+        XDestroyWindow(dpy, XtWindow(c->frame_shell));
+        wc_remove(c->win);
+        wc_remove(XtWindow(c->frame_shell));
+        wc_remove(XtWindow(c->frame_form));
+        free(c);
+        return;
+    }
     if (!destroyed) {
         set_wm_state(c, WithdrawnState);
         XReparentWindow(dpy, c->win, root, 0, 0);
@@ -573,10 +698,12 @@ void unmanage(Client *c, int destroyed) {
         XftDrawDestroy(c->frame_draw);
         c->frame_draw = NULL;
     }
+    wc_remove(c->win);
+    wc_remove(XtWindow(c->frame_shell));
+    wc_remove(XtWindow(c->frame_form));
     XtDestroyWidget(c->frame_shell);
     free(c);
-    arrange();
-    updateiconbar();
+    defer_schedule();
 }
 
 /* ── keybindings ────────────────────────────────────────────────────── */

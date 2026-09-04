@@ -83,6 +83,9 @@ struct Client {
     Widget frame_form;    /* XmForm — layout container (shadowThickness=0) */
     XftDraw *frame_draw;  /* Xft draw context for manual frame drawing */
     int x, y, w, h;      /* frame geometry (not client) */
+    int last_x, last_y, last_w, last_h;  /* last geometry pushed to X server */
+    Cursor last_cursor;         /* last cursor set on frame_form (None if never) */
+    Window last_cursor_win;     /* window the cursor was set on */
     int oldx, oldy, oldw, oldh; /* saved floating geometry */
     int ws;               /* workspace index */
     int is_floating;
@@ -98,6 +101,11 @@ struct Client {
     Pixmap icon_mask;     /* WM_HINTS icon mask (None if unavailable) */
     int icon_w, icon_h;   /* actual icon pixmap dimensions (0 if none) */
     Window icon_window;   /* WM_HINTS icon window (None if unavailable) */
+    /* cached scaled icon for the icon bar (rebuilt only when icon or
+     * target size changes — avoids per-draw XGetImage/XPutImage work) */
+    Pixmap icon_scaled_pm;
+    Pixmap icon_scaled_mask;
+    int icon_scaled_w, icon_scaled_h;
     Colormap cmap;        /* client's colormap (None if default) */
     int take_focus;        /* client claims WM_TAKE_FOCUS in WM_PROTOCOLS */
     int delete_window;     /* client claims WM_DELETE_WINDOW in WM_PROTOCOLS */
@@ -110,6 +118,8 @@ struct Client {
     int min_aspect_x, min_aspect_y;
     int max_aspect_x, max_aspect_y;
     char name[256];       /* window title (WM_NAME) */
+    XGlyphInfo name_ext;  /* cached extents of full name (font-tagged) */
+    XftFont *name_ext_font;  /* font the extents were measured with */
     int is_closing;          /* client is being destroyed, frame kept for fade-out */
     int fading;                    /* 0=none, 1=fading in, -1=fading out */
     unsigned int opacity;         /* current opacity 0..0xFFFFFFFF */
@@ -145,6 +155,7 @@ extern Window barwin;
 extern Window iconbar;
 extern Window checkwin;
 extern int running;
+extern int wm_restarting;  /* set during restart: hand clients to next WM */
 extern int (*xerrorxlib)(Display *, XErrorEvent *);
 
 extern XtAppContext app;
@@ -270,6 +281,12 @@ extern Time last_event_time;
 /* bar refresh timer */
 extern XtIntervalId bar_refresh_timer;
 
+/* deferred batching — coalesce arrange/bar/repaint into one pass */
+extern int defer_dirty;
+extern XtIntervalId defer_timer;
+void defer_flush(void);
+void defer_schedule(void);
+
 /* compositing state */
 extern int compositor_running;
 extern int damage_event_base;
@@ -335,6 +352,7 @@ void hide_icon_tooltip(void);
 void show_window_menu(Client *c, int root_x, int root_y);
 void show_root_menu(int root_x, int root_y);
 int show_confirm_dialog(const char *message);
+extern unsigned int menu_extents_gen;  /* bump on config/font reload */
 
 /* feedback.c */
 void fb_show(int x, int y, int w, int h, int style);
@@ -422,8 +440,15 @@ void compositor_start(void);
 void compositor_stop(void);
 void compositor_untrack_window(Window w);
 void compositor_configure_window(Window w);
+void compositor_map_window(Window w);
+void compositor_unmap_window(Window w);
 void compositor_manage_client(Client *c);
 void compositor_repaint(void);
+void compositor_repaint_full(void);
+void compositor_dirty_window(Window w);
+void compositor_schedule_repaint(void);
+void compositor_bg_reloaded(void);
+void compositor_opacity_changed(Window w);
 int compositor_handle_damage(XDamageNotifyEvent *ev);
 
 /* tray.c */

@@ -33,8 +33,15 @@ typedef struct {
     Damage  damage;
     Picture picture;    /* created lazily in paint from window with IncludeInferiors */
     Visual  *visual;    /* cached window visual */
+    XRenderPictFormat *fmt;  /* cached pict format for visual (None-per-frame lookup avoided) */
     int     depth;      /* cached window depth */
+    int     x, y;           /* cached position (root-relative for root children) */
     int     width, height;  /* last known size, to detect stale pictures */
+    int     map_state;      /* cached IsUnmapped/IsViewable/IsUnviewable */
+    int     has_argb;       /* cached: pict format has alpha channel */
+    Window  above;          /* last observed above-sibling (restack detection) */
+    unsigned int opacity;   /* cached _NET_WM_WINDOW_OPACITY */
+    int     opacity_valid;  /* opacity cache populated */
     Window  client_win;    /* client window inside the frame (None if not a frame) */
     Damage  client_damage; /* damage for client window */
     Window  form_win;      /* frame_form window inside the frame (None if not a frame) */
@@ -44,6 +51,30 @@ typedef struct {
 static TrkWin *trk = NULL;
 static int ntrk = 0;
 static int trk_cap = 0;
+
+/* forward decls for dirty-region helpers */
+static void dirty_mark_full(void);
+static void dirty_add_rect(int x, int y, int w, int h);
+static void dirty_add_win(const TrkWin *t);
+
+/* cached root-children stacking order — XQueryTree only when structure changed */
+static Window *child_stack = NULL;
+static unsigned int nchild_stack = 0;
+static int children_dirty = 1;
+
+/* dirty-region tracking: paint only the union of damaged rects */
+static int dirty_full = 1;      /* next paint covers whole screen */
+static int dirty_valid = 0;     /* dirty bbox is populated */
+static XRectangle dirty;        /* dirty bbox in root coordinates */
+
+/* cached root background */
+static Picture root_bg_picture = None;      /* picture for root_bg_pixmap */
+static Pixmap root_bg_picture_src = None;   /* pixmap root_bg_picture was created from */
+static int root_bg_solid_valid = 0;
+static XRenderColor root_bg_color = { 0x2222, 0x2222, 0x2222, 0xFFFF };
+
+/* last alpha filled into the shared 1x1 mask (skip redundant fills) */
+static unsigned short last_mask_alpha = 0;
 
 /* 1x1 alpha pixmap for per-window opacity masking */
 static Pixmap alpha_pixmap = None;
@@ -81,8 +112,17 @@ static TrkWin *trk_add(Window w)
     t->win = w;
     t->visual = wa.visual;
     t->depth = wa.depth;
+    t->fmt = XRenderFindVisualFormat(dpy, wa.visual);
+    t->has_argb = t->fmt && t->fmt->type == PictTypeDirect &&
+                  t->fmt->direct.alphaMask != 0;
+    t->x = wa.x;
+    t->y = wa.y;
     t->width = wa.width;
     t->height = wa.height;
+    t->map_state = wa.map_state;
+    t->above = None;
+    t->opacity = 0xFFFFFFFF;
+    t->opacity_valid = 0;
     t->damage = XDamageCreate(dpy, w, XDamageReportNonEmpty);
     t->picture = None;
     t->client_win = None;
@@ -119,6 +159,7 @@ static void trk_remove(Window w)
             if (trk[i].form_damage)   XDamageDestroy(dpy, trk[i].form_damage);
             if (trk[i].picture)       XRenderFreePicture(dpy, trk[i].picture);
             trk[i] = trk[--ntrk];
+            children_dirty = 1;
             return;
         }
     }
@@ -134,6 +175,67 @@ static void trk_clear(void)
     }
     free(trk);
     trk = NULL; ntrk = 0; trk_cap = 0;
+    free(child_stack);
+    child_stack = NULL; nchild_stack = 0;
+    children_dirty = 1;
+    dirty_full = 1; dirty_valid = 0;
+}
+
+/* update cached map state from MapNotify/UnmapNotify in the event loop,
+ * avoiding a per-frame XGetWindowAttributes round trip */
+static void trk_mark_mapped(Window w, int mapped)
+{
+    TrkWin *t = trk_find(w);
+    if (!t) {
+        /* never-seen window (tooltip, override-redirect popup) —
+         * track it now so its rect is known and dirtied */
+        if (!mapped) return;
+        t = trk_add(w);
+        if (!t) return;
+    }
+    t->map_state = mapped ? IsViewable : IsUnmapped;
+    dirty_add_win(t);
+    children_dirty = 1;  /* map order may have changed stacking */
+}
+
+/* ── dirty-region helpers ───────────────────────────────────────────── */
+
+static void dirty_mark_full(void)
+{
+    dirty_full = 1;
+}
+
+static void dirty_add_rect(int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0) return;
+    if (dirty_full) return;  /* already everything */
+    XRectangle r = { (short)x, (short)y, (unsigned short)w, (unsigned short)h };
+    if (!dirty_valid) {
+        dirty = r;
+        dirty_valid = 1;
+        return;
+    }
+    /* bounding-box union */
+    int x2 = MAX(dirty.x + (int)dirty.width,  x + w);
+    int y2 = MAX(dirty.y + (int)dirty.height, y + h);
+    dirty.x      = (short)MIN(dirty.x, x);
+    dirty.y      = (short)MIN(dirty.y, y);
+    dirty.width  = (unsigned short)(x2 - dirty.x);
+    dirty.height = (unsigned short)(y2 - dirty.y);
+}
+
+static void dirty_add_win(const TrkWin *t)
+{
+    /* include a small margin so translucent edges/older content is covered */
+    dirty_add_rect(t->x - 1, t->y - 1, t->width + 2, t->height + 2);
+}
+
+/* mark a client's frame rect dirty (fade steps etc.) */
+static void dirty_client(Client *c)
+{
+    if (!compositor_running) return;
+    TrkWin *t = trk_find(XtWindow(c->frame_shell));
+    if (t) dirty_add_win(t);
 }
 
 /* ── untrack a window (call from DestroyNotify) ─────────────────────── */
@@ -163,7 +265,28 @@ void compositor_untrack_window(Window w)
 void compositor_configure_window(Window w)
 {
     TrkWin *t = trk_find(w);
-    if (t) trk_invalidate(t);
+    /* untracked windows are grandchildren (client/form) — their parent
+     * frame is tracked and its damage covers content changes */
+    if (!t) return;
+    /* remember old rect so the vacated region gets repainted */
+    int ox = t->x, oy = t->y, ow = t->width, oh = t->height;
+    /* read the new geometry once and refresh all caches — avoids the
+     * per-frame XGetWindowAttributes round trip entirely */
+    XWindowAttributes wa;
+    if (XGetWindowAttributes(dpy, w, &wa)) {
+        if (t->picture && (wa.width != t->width || wa.height != t->height))
+            trk_invalidate(t);
+        t->x = wa.x;
+        t->y = wa.y;
+        t->width = wa.width;
+        t->height = wa.height;
+        t->map_state = wa.map_state;
+    }
+    /* ConfigureNotify also fires on restack (XRaiseWindow) — refresh order */
+    children_dirty = 1;
+    /* old + new rects: covers move, resize, and restack overlaps */
+    dirty_add_rect(ox - 1, oy - 1, ow + 2, oh + 2);
+    dirty_add_win(t);
 }
 
 /* ── track client window for damage (call from manage) ─────────────── */
@@ -184,30 +307,49 @@ void compositor_manage_client(Client *c)
         t->form_win = form_w;
         t->form_damage = XDamageCreate(dpy, form_w, XDamageReportNonEmpty);
     }
+    dirty_add_win(t);
 }
+
+/* ── map/unmap notification from the event loop ────────────────────── */
+
+void compositor_map_window(Window w)   { if (compositor_running) trk_mark_mapped(w, 1); }
+void compositor_unmap_window(Window w) { if (compositor_running) trk_mark_mapped(w, 0); }
 
 /* ── get opacity for a root child window ────────────────────────────── */
 
-static unsigned int window_opacity(Window w)
+static unsigned int trk_opacity(TrkWin *t)
 {
-    /* if it's a client frame, use tracked Client opacity */
+    /* client frames keep opacity in the Client struct */
     for (Client *c = clients; c; c = c->next) {
-        if (XtWindow(c->frame_shell) == w)
+        if (XtWindow(c->frame_shell) == t->win)
             return c->opacity;
     }
-    /* read _NET_WM_WINDOW_OPACITY property */
-    Atom actual;
-    int fmt;
-    unsigned long n, after;
-    unsigned char *data = NULL;
-    unsigned int op = 0xFFFFFFFF;
-    if (XGetWindowProperty(dpy, w, net_wm_window_opacity, 0, 1, False,
-                           XA_CARDINAL, &actual, &fmt,
-                           &n, &after, &data) == Success && data && n > 0) {
-        op = *(unsigned int *)data;
-        XFree(data);
+    if (!t->opacity_valid) {
+        /* read _NET_WM_WINDOW_OPACITY property once, cache until changed */
+        Atom actual;
+        int fmt;
+        unsigned long n, after;
+        unsigned char *data = NULL;
+        t->opacity = 0xFFFFFFFF;
+        if (XGetWindowProperty(dpy, t->win, net_wm_window_opacity, 0, 1, False,
+                               XA_CARDINAL, &actual, &fmt,
+                               &n, &after, &data) == Success && data && n > 0) {
+            t->opacity = *(unsigned int *)data;
+            XFree(data);
+        }
+        t->opacity_valid = 1;
     }
-    return op;
+    return t->opacity;
+}
+
+/* called from PropertyNotify for _NET_WM_WINDOW_OPACITY */
+void compositor_opacity_changed(Window w)
+{
+    if (!compositor_running) return;
+    TrkWin *t = trk_find(w);
+    if (!t) return;
+    t->opacity_valid = 0;
+    dirty_add_win(t);
 }
 
 /* ── ensure alpha mask resources exist ───────────────────────────────── */
@@ -225,10 +367,32 @@ static void ensure_alpha_picture(void)
 
 /* ── compositor paint ────────────────────────────────────────────────── */
 
+/* repaint the damaged region (or the full screen when dirty_full).
+ * Root children stacking order and per-window attributes are cached;
+ * XQueryTree/XGetWindowAttributes only run on structural changes. */
 static void compositor_paint_all(void)
 {
     if (!root_fmt || !root_picture) return;
     ensure_alpha_picture();
+
+    /* nothing dirty — nothing to do */
+    if (!dirty_full && !dirty_valid) return;
+
+    /* determine the repaint region */
+    int rx, ry, rw, rh;
+    if (dirty_full) {
+        rx = 0; ry = 0; rw = sw; rh = sh;
+    } else {
+        rx = dirty.x; ry = dirty.y;
+        rw = dirty.width; rh = dirty.height;
+        /* clamp to screen */
+        if (rx < 0) { rw += rx; rx = 0; }
+        if (ry < 0) { rh += ry; ry = 0; }
+        if (rx + rw > sw) rw = sw - rx;
+        if (ry + rh > sh) rh = sh - ry;
+        if (rw <= 0 || rh <= 0) { dirty_full = 0; dirty_valid = 0; return; }
+    }
+    int dirty_only = !dirty_full;
 
     /* ensure offscreen buffer is the right size */
     if (!root_buffer_pixmap || root_buffer_w != sw || root_buffer_h != sh) {
@@ -242,53 +406,97 @@ static void compositor_paint_all(void)
                                            0, NULL);
         root_buffer_w = sw;
         root_buffer_h = sh;
+        /* new buffer is blank — must repaint everything */
+        dirty_full = 1;
+        dirty_valid = 0;
+        dirty_only = 0;
+        rx = 0; ry = 0; rw = sw; rh = sh;
     }
 
-    /* paint root background into buffer */
+    /* paint root background into the dirty region */
     if (root_bg_pixmap != None) {
-        Picture bg = XRenderCreatePicture(dpy, root_bg_pixmap, root_fmt, 0, NULL);
-        XRenderComposite(dpy, PictOpSrc, bg, None, root_buffer,
-                         0, 0, 0, 0, 0, 0, (unsigned)sw, (unsigned)sh);
-        XRenderFreePicture(dpy, bg);
-    } else {
-        XRenderColor bg;
-        XColor exact, screen_c;
-        if (XAllocNamedColor(dpy, xcolormap, color_root_bg, &exact, &screen_c)) {
-            bg = (XRenderColor){ screen_c.red, screen_c.green, screen_c.blue, 0xFFFF };
-            XFreeColors(dpy, xcolormap, &screen_c.pixel, 1, 0);
-        } else {
-            bg = (XRenderColor){ 0x2222, 0x2222, 0x2222, 0xFFFF };
+        /* cache the background picture; invalidate when the pixmap changes */
+        if (root_bg_picture == None || root_bg_picture_src != root_bg_pixmap) {
+            if (root_bg_picture) XRenderFreePicture(dpy, root_bg_picture);
+            root_bg_picture = XRenderCreatePicture(dpy, root_bg_pixmap, root_fmt, 0, NULL);
+            root_bg_picture_src = root_bg_pixmap;
         }
-        XRenderFillRectangle(dpy, PictOpSrc, root_buffer, &bg,
-                             0, 0, (unsigned short)sw, (unsigned short)sh);
+        /* sample the bg picture at the region's own coordinates — the
+         * bg is screen-aligned; sampling at (0,0) would paste a shifted
+         * piece of the image into the buffer (the "moving background" bug) */
+        XRenderComposite(dpy, PictOpSrc, root_bg_picture, None, root_buffer,
+                         rx, ry, 0, 0, rx, ry, (unsigned)rw, (unsigned)rh);
+    } else {
+        /* cache the parsed solid color (no XAllocNamedColor per frame) */
+        if (!root_bg_solid_valid) {
+            XColor exact, screen_c;
+            if (XAllocNamedColor(dpy, xcolormap, color_root_bg, &exact, &screen_c)) {
+                root_bg_color = (XRenderColor){ screen_c.red, screen_c.green,
+                                                screen_c.blue, 0xFFFF };
+                XFreeColors(dpy, xcolormap, &screen_c.pixel, 1, 0);
+            } else {
+                root_bg_color = (XRenderColor){ 0x2222, 0x2222, 0x2222, 0xFFFF };
+            }
+            root_bg_solid_valid = 1;
+        }
+        XRenderFillRectangle(dpy, PictOpSrc, root_buffer, &root_bg_color,
+                             (unsigned short)rx, (unsigned short)ry,
+                             (unsigned short)rw, (unsigned short)rh);
     }
 
-    /* composite ALL root children in stacking order */
-    Window dum_root, dum_parent;
-    Window *children = NULL;
-    unsigned int nchildren = 0;
-    if (!XQueryTree(dpy, root, &dum_root, &dum_parent, &children, &nchildren))
-        goto blit;
+    /* refresh cached children stacking order only when structure changed */
+    if (children_dirty) {
+        Window dum_root, dum_parent;
+        Window *children = NULL;
+        unsigned int nchildren = 0;
+        if (XQueryTree(dpy, root, &dum_root, &dum_parent, &children, &nchildren)) {
+            free(child_stack);
+            child_stack = children;
+            nchild_stack = nchildren;
+        } else if (children) {
+            XFree(children);
+        }
+        children_dirty = 0;
+    }
 
-    for (unsigned int i = 0; i < nchildren; i++) {
-        Window w = children[i];
+    /* composite only windows intersecting the dirty region */
+    for (unsigned int i = 0; i < nchild_stack; i++) {
+        Window w = child_stack[i];
         if (!w) continue;
         if (w == XtWindow(toplevel_shell)) continue;
 
-        XWindowAttributes wa;
-        if (!XGetWindowAttributes(dpy, w, &wa)) continue;
-        if (wa.class == InputOnly) continue;
-        if (wa.map_state != IsViewable) continue;
-        if (wa.width == 0 || wa.height == 0) continue;
+        TrkWin *t = trk_find(w);
+        if (!t) { t = trk_add(w); children_dirty = 1; }
+        if (!t) continue;
 
-        unsigned int op = window_opacity(w);
+        if (t->map_state != IsViewable) continue;
+        if (t->width == 0 || t->height == 0) continue;
+
+        /* clip the composite to the dirty region: source offset is in
+         * window-local coords, dst is the intersection in root coords.
+         * A small damage on a large window then costs O(damage), not
+         * O(window). */
+        int src_x = 0, src_y = 0;
+        int dst_x = t->x, dst_y = t->y;
+        unsigned dst_w = (unsigned)t->width, dst_h = (unsigned)t->height;
+        if (dirty_only) {
+            int x1 = MAX(t->x, rx);
+            int y1 = MAX(t->y, ry);
+            int x2 = MIN(t->x + t->width, rx + rw);
+            int y2 = MIN(t->y + t->height, ry + rh);
+            if (x1 >= x2 || y1 >= y2)
+                continue;  /* entirely outside the dirty region */
+            src_x = x1 - t->x;
+            src_y = y1 - t->y;
+            dst_x = x1;
+            dst_y = y1;
+            dst_w = (unsigned)(x2 - x1);
+            dst_h = (unsigned)(y2 - y1);
+        }
+
+        unsigned int op = trk_opacity(t);
         unsigned short alpha = (unsigned short)(op >> 16);
         if (alpha == 0) continue;
-
-        /* ensure tracked (lazy add for new windows) */
-        TrkWin *t = trk_find(w);
-        if (!t) t = trk_add(w);
-        if (!t) continue;
 
         /* lazily add client/form window damage if we missed it in trk_add
          * (e.g. client was added to the list after the frame was first tracked) */
@@ -304,17 +512,8 @@ static void compositor_paint_all(void)
             }
         }
 
-        /* invalidate cached picture on resize */
-        if (t->picture && (wa.width != t->width || wa.height != t->height))
-            trk_invalidate(t);
-        t->width = wa.width;
-        t->height = wa.height;
-
-        /* lazily create Picture from window with IncludeInferiors.
-         * This composites the window and all its children (frame +
-         * client content) in a single source picture — same approach
-         * as xcompmgr. */
-        XRenderPictFormat *fmt = XRenderFindVisualFormat(dpy, t->visual);
+        /* cached pict format */
+        XRenderPictFormat *fmt = t->fmt;
         if (!fmt) continue;
 
         if (!t->picture) {
@@ -327,31 +526,34 @@ static void compositor_paint_all(void)
 
         /* ARGB windows have per-pixel alpha and must always use PictOpOver.
          * Non-ARGB windows at full opacity can use the faster PictOpSrc. */
-        int has_argb = (fmt->type == PictTypeDirect && fmt->direct.alphaMask != 0);
-        if (has_argb || alpha != 0xFFFF) {
-            XRenderColor ac = { 0, 0, 0, alpha };
-            XRenderFillRectangle(dpy, PictOpSrc, alpha_picture, &ac, 0, 0, 1, 1);
+        if (t->has_argb || alpha != 0xFFFF) {
+            /* refill the shared 1x1 alpha mask only when alpha changed */
+            if (alpha != last_mask_alpha) {
+                XRenderColor ac = { 0, 0, 0, alpha };
+                XRenderFillRectangle(dpy, PictOpSrc, alpha_picture, &ac, 0, 0, 1, 1);
+                last_mask_alpha = alpha;
+            }
             XRenderComposite(dpy, PictOpOver, t->picture, alpha_picture,
                              root_buffer,
-                             0, 0, 0, 0, wa.x, wa.y,
-                             (unsigned)wa.width, (unsigned)wa.height);
+                             src_x, src_y, 0, 0, dst_x, dst_y, dst_w, dst_h);
         } else {
             XRenderComposite(dpy, PictOpSrc, t->picture, None, root_buffer,
-                             0, 0, 0, 0, wa.x, wa.y,
-                             (unsigned)wa.width, (unsigned)wa.height);
+                             src_x, src_y, 0, 0, dst_x, dst_y, dst_w, dst_h);
         }
     }
-    if (children) XFree(children);
 
-blit:
-    /* blit buffer to root */
+    /* blit only the dirty region to root */
     XRenderComposite(dpy, PictOpSrc, root_buffer, None, root_picture,
-                     0, 0, 0, 0, 0, 0, (unsigned)sw, (unsigned)sh);
-    /* set root background to our composited buffer pixmap — when the
-     * X server handles an exposure event on root (e.g. after a window
-     * is unmapped), it paints the buffer as background, which matches
-     * our composited output and prevents flashing.  (xcompmgr trick) */
-    XSetWindowBackgroundPixmap(dpy, root, root_buffer_pixmap);
+                     rx, ry, 0, 0, rx, ry, (unsigned)rw, (unsigned)rh);
+    if (dirty_full) {
+        /* when the X server handles an exposure event on root (e.g. after a
+         * window is unmapped), it paints the buffer as background, which
+         * matches our composited output and prevents flashing (xcompmgr trick) */
+        XSetWindowBackgroundPixmap(dpy, root, root_buffer_pixmap);
+    }
+    dirty_full = 0;
+    dirty_valid = 0;
+
     /* flush so each frame is visible immediately (important for fade animation) */
     XFlush(dpy);
 }
@@ -413,14 +615,38 @@ void compositor_start(void)
     XUngrabServer(dpy);
 
     /* initial paint */
+    dirty_mark_full();
     compositor_paint_all();
 
     compositor_running = 1;
 }
 
+/* compositor-only repaint batching: damage events schedule a repaint timer
+ * that coalesces bursts — WITHOUT running the full defer_flush pass
+ * (arrange/drawbar/sysinfo reads), which would make every cursor blink
+ * and window animation pay for WM housekeeping */
+static XtIntervalId repaint_timer = 0;
+
+static void repaint_timer_cb(XtPointer data, XtIntervalId *id)
+{
+    (void)data; (void)id;
+    repaint_timer = 0;
+    compositor_paint_all();
+}
+
+void compositor_schedule_repaint(void)
+{
+    if (repaint_timer) return;
+    repaint_timer = XtAppAddTimeOut(app, 0, repaint_timer_cb, NULL);
+}
+
 void compositor_stop(void)
 {
     if (!compositor_running) return;
+    if (repaint_timer) {
+        XtRemoveTimeOut(repaint_timer);
+        repaint_timer = 0;
+    }
 
     /* unredirect — X server resumes direct rendering */
     XCompositeRedirectSubwindows(dpy, root, CompositeRedirectAutomatic);
@@ -440,6 +666,10 @@ void compositor_stop(void)
     if (root_buffer_pixmap){ XFreePixmap(dpy, root_buffer_pixmap);        root_buffer_pixmap = None; }
     if (alpha_picture)     { XRenderFreePicture(dpy, alpha_picture);     alpha_picture = None; }
     if (alpha_pixmap)      { XFreePixmap(dpy, alpha_pixmap);             alpha_pixmap = None; }
+    if (root_bg_picture)   { XRenderFreePicture(dpy, root_bg_picture);   root_bg_picture = None; }
+    root_bg_picture_src = None;
+    root_bg_solid_valid = 0;
+    last_mask_alpha = 0;
 
     root_fmt = NULL;
 
@@ -456,20 +686,52 @@ void compositor_repaint(void)
     if (compositor_running) compositor_paint_all();
 }
 
+/* force a full-screen repaint on the next paint (public, for paths that
+ * add new windows and cannot wait for damage events — menu/dialog open) */
+void compositor_repaint_full(void)
+{
+    dirty_mark_full();
+    if (compositor_running) compositor_paint_all();
+}
+
+/* mark a window's rect dirty (public, for nested event loops that redraw
+ * a window without generating damage events we can process) */
+void compositor_dirty_window(Window w)
+{
+    if (!compositor_running) return;
+    TrkWin *t = trk_find(w);
+    if (t) dirty_add_win(t);
+}
+
+/* called from bg_load() — background pixmap/color changed */
+void compositor_bg_reloaded(void)
+{
+    root_bg_solid_valid = 0;
+    if (compositor_running) {
+        dirty_mark_full();
+        compositor_schedule_repaint();
+    }
+}
+
 /* ── damage event handler ───────────────────────────────────────────── */
 
 int compositor_handle_damage(XDamageNotifyEvent *ev)
 {
     if (!compositor_running) return 0;
-    XDamageSubtract(dpy, ev->damage, None, None);
-    /* also subtract damage on related tracked windows (form, client) */
+    Damage d = ev->damage;
+    /* find the tracked window owning this damage handle and subtract
+     * only it — O(N) scan instead of subtracting every window's damage */
     for (int i = 0; i < ntrk; i++) {
-        if (trk[i].client_damage)
-            XDamageSubtract(dpy, trk[i].client_damage, None, None);
-        if (trk[i].form_damage)
-            XDamageSubtract(dpy, trk[i].form_damage, None, None);
+        if (trk[i].damage == d || trk[i].client_damage == d ||
+            trk[i].form_damage == d) {
+            XDamageSubtract(dpy, d, None, None);
+            /* the frame picture uses IncludeInferiors, so client/form
+             * damage shows within the frame rect — mark just that rect */
+            dirty_add_win(&trk[i]);
+            break;
+        }
     }
-    compositor_paint_all();
+    compositor_schedule_repaint();
     return 1;
 }
 
@@ -541,6 +803,7 @@ static void fade_step(XtPointer client_data, XtIntervalId *id)
             c->opacity = 0xFFFFFFFF;
             c->fading = 0;
             set_opacity(XtWindow(c->frame_shell), 0xFFFFFFFF);
+            dirty_client(c);
             compositor_repaint();
             return;
         }
@@ -553,6 +816,7 @@ static void fade_step(XtPointer client_data, XtIntervalId *id)
             c->opacity = 0;
             c->fading = 0;
             set_opacity(XtWindow(c->frame_shell), 0);
+            dirty_client(c);
             compositor_repaint();
             void (*cb)(Client *) = c->fade_done_cb;
             c->fade_done_cb = NULL;
@@ -565,6 +829,7 @@ static void fade_step(XtPointer client_data, XtIntervalId *id)
     }
 
     set_opacity(XtWindow(c->frame_shell), c->opacity);
+    dirty_client(c);
     compositor_repaint();
     c->fade_timer = XtAppAddTimeOut(app, FADE_STEP_MS, fade_step, (XtPointer)c);
 }

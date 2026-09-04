@@ -166,7 +166,7 @@ void swapdir(const WmArg *arg) {
         }
     }
     arrange();
-    drawbar();
+    defer_schedule();
     XWarpPointer(dpy, None, root, 0, 0, 0, 0,
                  focused->x + focused->w / 2,
                  focused->y + focused->h / 2);
@@ -216,7 +216,7 @@ void togglefloat(const WmArg *arg) {
         btree_add(focused);
     }
     arrange();
-    drawbar();
+    defer_schedule();
 }
 
 void incmaster(const WmArg *arg) {
@@ -225,6 +225,7 @@ void incmaster(const WmArg *arg) {
     if (mfact < 0.1) mfact = 0.1;
     if (mfact > 0.9) mfact = 0.9;
     arrange();
+    defer_schedule();
 }
 
 void zoom(const WmArg *arg) {
@@ -249,6 +250,7 @@ void zoom(const WmArg *arg) {
 
     focus(master);
     arrange();
+    defer_schedule();
 }
 
 void togglefullscreen(const WmArg *arg) {
@@ -282,6 +284,7 @@ void togglefullscreen(const WmArg *arg) {
         updateframe(focused);
         send_configure_notify(focused);
         arrange();
+        defer_schedule();
         XChangeProperty(dpy, focused->win, net_wm_state, XA_ATOM, 32,
                         PropModeReplace, NULL, 0);
     }
@@ -324,7 +327,7 @@ void viewworkspace(const WmArg *arg) {
 
     arrange();
     focus(nexttiled(clients));
-    updateiconbar();
+    defer_schedule();
 }
 
 static void move_hide_cb(Client *c) {
@@ -351,7 +354,7 @@ void movetoworkspace(const WmArg *arg) {
                     PropModeReplace, (unsigned char *)&desktop, 1);
     focus(nexttiled(clients));
     arrange();
-    updateiconbar();
+    defer_schedule();
 }
 
 void quit(const WmArg *arg) {
@@ -374,12 +377,15 @@ void swapbar(const WmArg *arg) {
         XUnmapWindow(dpy, barwin);
     }
     updateiconbar();
+    /* bar visibility changes the tiling area */
+    arrange();
+    defer_schedule();
 }
 
 void setlayout(const WmArg *arg) {
     cur_layout = arg->i;
     arrange();
-    drawbar();
+    defer_schedule();
 }
 
 void cyclelayout(const WmArg *arg) {
@@ -387,7 +393,7 @@ void cyclelayout(const WmArg *arg) {
     cur_layout = (cur_layout == LAYOUT_MASTER_STACK) ? LAYOUT_BINARY_TREE
                                                      : LAYOUT_MASTER_STACK;
     arrange();
-    drawbar();
+    defer_schedule();
 }
 
 void viewwsrel(const WmArg *arg) {

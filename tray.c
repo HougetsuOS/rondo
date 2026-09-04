@@ -2,6 +2,7 @@
  * rondo — system tray (XEmbed notification area)
  */
 #include "wm.h"
+#include <limits.h>
 
 TrayIcon *tray_icons = NULL;
 int num_tray_icons = 0;
@@ -114,7 +115,7 @@ void tray_remove(Window icon_win) {
             XDestroyWindow(dpy, tray_icons[i].wrapper);
             tray_icons[i] = tray_icons[num_tray_icons - 1];
             num_tray_icons--;
-            tray_icons = realloc(tray_icons, sizeof(TrayIcon) * (size_t)(num_tray_icons > 0 ? num_tray_icons : 1));
+            /* no realloc on removal — capacity is reused for the next dock */
             tray_update();
             return;
         }
@@ -129,9 +130,28 @@ void tray_reposition(void) {
     if (tray_widget_w <= 0 || tray_widget_h <= 0 || num_tray_icons <= 0) return;
     int sz = tray_icon_size();
     int pad = 2;
+    /* skip icons whose computed position/size is unchanged — this runs
+     * after every drawbar() and would otherwise push 2N move-resizes */
+    static int last_sz = 0;
+    static int last_x0 = INT_MIN, last_y0 = INT_MIN, last_n = -1;
+    static int last_horiz = -1;
+    int horiz = is_horizontal(bar_position);
+    if (sz == last_sz && num_tray_icons == last_n && horiz == last_horiz) {
+        if (horiz) {
+            int x = tray_widget_x;
+            int y = tray_widget_y + (tray_widget_h - sz) / 2;
+            if (x == last_x0 && y == last_y0) return;
+        } else {
+            int x = tray_widget_x + (tray_widget_w - sz) / 2;
+            int y = tray_widget_y;
+            if (x == last_x0 && y == last_y0) return;
+        }
+    }
+    last_sz = sz; last_n = num_tray_icons; last_horiz = horiz;
     if (is_horizontal(bar_position)) {
         int x = tray_widget_x;
         int y = tray_widget_y + (tray_widget_h - sz) / 2;
+        last_x0 = x; last_y0 = y;
         for (int i = 0; i < num_tray_icons; i++) {
             XMoveResizeWindow(dpy, tray_icons[i].wrapper, x, y, sz, sz);
             XMoveResizeWindow(dpy, tray_icons[i].icon, 0, 0, sz, sz);
@@ -140,6 +160,7 @@ void tray_reposition(void) {
     } else {
         int x = tray_widget_x + (tray_widget_w - sz) / 2;
         int y = tray_widget_y;
+        last_x0 = x; last_y0 = y;
         for (int i = 0; i < num_tray_icons; i++) {
             XMoveResizeWindow(dpy, tray_icons[i].wrapper, x, y, sz, sz);
             XMoveResizeWindow(dpy, tray_icons[i].icon, 0, 0, sz, sz);

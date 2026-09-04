@@ -150,7 +150,7 @@ void mousemove(Client *c, int button, int edge, int x_root, int y_root) {
             /* draw new outline + update feedback window */
             draw_outline(cur_x, cur_y, cur_w, cur_h);
             fb_update(cur_x, cur_y, cur_w, cur_h, fb_style);
-            XSync(dpy, False);
+            XFlush(dpy);
             break;
 
         case ButtonRelease:

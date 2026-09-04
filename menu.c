@@ -4,6 +4,10 @@
 #include "wm.h"
 #include <limits.h>
 
+/* generation counter — bumped on config/font reload so cached menu
+ * extents are re-measured */
+unsigned int menu_extents_gen = 0;
+
 /* ── window menu items ───────────────────────────────────────────────── */
 
 enum {
@@ -81,6 +85,47 @@ static int item_at_y(const CfgMenuItem *items, int num_items, int my) {
     return -1;
 }
 
+/* render one menu row (separator or item) at y */
+static void draw_menu_row(XftDraw *draw, int menu_w,
+                          const CfgMenuItem *items, int num_items,
+                          int i, int highlight, int y,
+                          MenuEnabledFn check, void *ctx) {
+    if (items[i].action == MENU_SEP) {
+        int sep_y = y + 2;
+        int sep_x = MENU_BORDER + 2;
+        int sep_w = menu_w - 2 * MENU_BORDER - 4;
+        XftDrawRect(draw, &col_frame_shadow, sep_x, sep_y, sep_w, 1);
+        XftDrawRect(draw, &col_frame_light, sep_x, sep_y + 1, sep_w, 1);
+        return;
+    }
+    int enabled = generic_item_enabled(items, num_items, i, check, ctx);
+    int ix = MENU_BORDER;
+    int iw = menu_w - 2 * MENU_BORDER;
+    if (i == highlight && enabled) {
+        bevel_rect(draw, ix, y, iw, MENU_ITEM_H,
+                   2, 2, 2, 2, &col_frame_light, &col_frame_shadow);
+    }
+    XftColor *text_col;
+    if (!enabled)
+        text_col = &col_frame_shadow;
+    else
+        text_col = &col_btn_fg;
+    int namelen = (int)strlen(items[i].label);
+    int text_y = y + (MENU_ITEM_H + xftfont->ascent - xftfont->descent) / 2;
+    XftDrawStringUtf8(draw, text_col, xftfont,
+                      ix + MENU_PAD_X, text_y,
+                      (XftChar8 *)items[i].label, namelen);
+}
+
+/* y offset of row i */
+static int menu_row_y(const CfgMenuItem *items, int num_items, int row) {
+    (void)num_items;
+    int y = MENU_PAD_Y + MENU_BORDER;
+    for (int i = 0; i < row; i++)
+        y += (items[i].action == MENU_SEP) ? 6 : MENU_ITEM_H;
+    return y;
+}
+
 static void draw_menu(XftDraw *draw, int menu_w, int menu_h,
                       const CfgMenuItem *items, int num_items,
                       int highlight, MenuEnabledFn check, void *ctx) {
@@ -91,51 +136,58 @@ static void draw_menu(XftDraw *draw, int menu_w, int menu_h,
 
     int y = MENU_PAD_Y + MENU_BORDER;
     for (int i = 0; i < num_items; i++) {
-        if (items[i].action == MENU_SEP) {
-            int sep_y = y + 2;
-            int sep_x = MENU_BORDER + 2;
-            int sep_w = menu_w - 2 * MENU_BORDER - 4;
-            XftDrawRect(draw, &col_frame_shadow, sep_x, sep_y, sep_w, 1);
-            XftDrawRect(draw, &col_frame_light, sep_x, sep_y + 1, sep_w, 1);
-            y += 6;
-            continue;
-        }
-        int enabled = generic_item_enabled(items, num_items, i, check, ctx);
-        int ix = MENU_BORDER;
-        int iw = menu_w - 2 * MENU_BORDER;
-        if (i == highlight && enabled) {
-            bevel_rect(draw, ix, y, iw, MENU_ITEM_H,
-                       2, 2, 2, 2, &col_frame_light, &col_frame_shadow);
-        }
-        XftColor *text_col;
-        if (!enabled)
-            text_col = &col_frame_shadow;
-        else
-            text_col = &col_btn_fg;
-        int namelen = (int)strlen(items[i].label);
-        int text_y = y + (MENU_ITEM_H + xftfont->ascent - xftfont->descent) / 2;
-        XftDrawStringUtf8(draw, text_col, xftfont,
-                          ix + MENU_PAD_X, text_y,
-                          (XftChar8 *)items[i].label, namelen);
-        y += MENU_ITEM_H;
+        draw_menu_row(draw, menu_w, items, num_items, i, highlight, y, check, ctx);
+        y += (items[i].action == MENU_SEP) ? 6 : MENU_ITEM_H;
     }
-    XSync(dpy, False);
+    XFlush(dpy);
+}
+
+/* repaint only the rows that changed (old highlight row + new highlight row)
+ * instead of the whole menu — highlight changes happen at mouse rate */
+static void draw_menu_highlight_change(XftDraw *draw, int menu_w,
+                                       const CfgMenuItem *items, int num_items,
+                                       int old_hl, int new_hl,
+                                       MenuEnabledFn check, void *ctx) {
+    if (old_hl == new_hl) return;
+    for (int pass = 0; pass < 2; pass++) {
+        int i = pass ? new_hl : old_hl;
+        if (i < 0 || i >= num_items) continue;
+        int y = menu_row_y(items, num_items, i);
+        /* erase row interior then redraw */
+        XftDrawRect(draw, &col_menu_bg, MENU_BORDER, y,
+                    menu_w - 2 * MENU_BORDER, MENU_ITEM_H);
+        draw_menu_row(draw, menu_w, items, num_items, i, new_hl, y, check, ctx);
+    }
+    XFlush(dpy);
 }
 
 static int run_menu(const CfgMenuItem *items, int num_items,
                     MenuEnabledFn check, void *ctx,
                     int root_x, int root_y, int drag_select) {
-    /* calculate dimensions */
-    int max_text_w = 0;
-    for (int i = 0; i < num_items; i++) {
-        if (items[i].label) {
-            XGlyphInfo ext;
-            XftTextExtents8(dpy, xftfont, (XftChar8 *)items[i].label,
-                             (int)strlen(items[i].label), &ext);
-            if (ext.xOff > max_text_w) max_text_w = ext.xOff;
+    /* calculate dimensions — max text width is cached: the window-menu
+     * labels are static and root-menu labels only change on config reload,
+     * which bumps the menu-extents generation */
+    static unsigned int extents_gen = 0;
+    static const CfgMenuItem *extents_items = NULL;
+    static int extents_n = 0;
+    static int cached_max_w = 0;
+    if (items != extents_items || num_items != extents_n ||
+        extents_gen != menu_extents_gen) {
+        int max_text_w = 0;
+        for (int i = 0; i < num_items; i++) {
+            if (items[i].label) {
+                XGlyphInfo ext;
+                XftTextExtents8(dpy, xftfont, (XftChar8 *)items[i].label,
+                                 (int)strlen(items[i].label), &ext);
+                if (ext.xOff > max_text_w) max_text_w = ext.xOff;
+            }
         }
+        cached_max_w = max_text_w;
+        extents_items = items;
+        extents_n = num_items;
+        extents_gen = menu_extents_gen;
     }
-    int menu_w = max_text_w + 2 * MENU_PAD_X + 2 * MENU_BORDER;
+    int menu_w = cached_max_w + 2 * MENU_PAD_X + 2 * MENU_BORDER;
     int menu_h = 0;
     for (int i = 0; i < num_items; i++)
         menu_h += (items[i].action == MENU_SEP) ? 6 : MENU_ITEM_H;
@@ -185,7 +237,7 @@ static int run_menu(const CfgMenuItem *items, int num_items,
      * in click-select mode: highlight starts at first enabled, first release consumed */
     int highlight = drag_select ? -1 : first_enabled(items, num_items, check, ctx);
     draw_menu(menu_draw, menu_w, menu_h, items, num_items, highlight, check, ctx);
-    compositor_repaint();
+    compositor_repaint_full();
 
     /* event loop */
     XEvent ev;
@@ -207,15 +259,19 @@ static int run_menu(const CfgMenuItem *items, int num_items,
             } else if (ks == XK_Down || ks == XK_KP_Down) {
                 int new_hl = next_enabled(items, num_items, check, ctx, highlight < 0 ? -1 : highlight);
                 if (new_hl != highlight) {
+                    int old_hl = highlight;
                     highlight = new_hl;
-                    draw_menu(menu_draw, menu_w, menu_h, items, num_items, highlight, check, ctx);
+                    draw_menu_highlight_change(menu_draw, menu_w, items, num_items, old_hl, highlight, check, ctx);
+                    compositor_dirty_window(menu_win);
                     compositor_repaint();
                 }
             } else if (ks == XK_Up || ks == XK_KP_Up) {
                 int new_hl = prev_enabled(items, num_items, check, ctx, highlight < 0 ? num_items : highlight);
                 if (new_hl != highlight) {
+                    int old_hl = highlight;
                     highlight = new_hl;
-                    draw_menu(menu_draw, menu_w, menu_h, items, num_items, highlight, check, ctx);
+                    draw_menu_highlight_change(menu_draw, menu_w, items, num_items, old_hl, highlight, check, ctx);
+                    compositor_dirty_window(menu_win);
                     compositor_repaint();
                 }
             }
@@ -227,8 +283,10 @@ static int run_menu(const CfgMenuItem *items, int num_items,
                 if (new_hl >= 0 && !generic_item_enabled(items, num_items, new_hl, check, ctx))
                     new_hl = -1;
                 if (new_hl != highlight) {
+                    int old_hl = highlight;
                     highlight = new_hl;
-                    draw_menu(menu_draw, menu_w, menu_h, items, num_items, highlight, check, ctx);
+                    draw_menu_highlight_change(menu_draw, menu_w, items, num_items, old_hl, highlight, check, ctx);
+                    compositor_dirty_window(menu_win);
                     compositor_repaint();
                 }
             }
@@ -236,8 +294,10 @@ static int run_menu(const CfgMenuItem *items, int num_items,
         }
         case LeaveNotify:
             if (drag_select && highlight != -1) {
+                int old_hl = highlight;
                 highlight = -1;
-                draw_menu(menu_draw, menu_w, menu_h, items, num_items, highlight, check, ctx);
+                draw_menu_highlight_change(menu_draw, menu_w, items, num_items, old_hl, highlight, check, ctx);
+                compositor_dirty_window(menu_win);
                 compositor_repaint();
             }
             break;
@@ -535,7 +595,7 @@ static void draw_dialog(XftDraw *draw, int dlg_w, int dlg_h,
                           lx, ly, (XftChar8 *)lbl, llen);
     }
     #undef DRAW_BTN_EMPHASIS
-    XSync(dpy, False);
+    XFlush(dpy);
 }
 
 int show_confirm_dialog(const char *message) {
@@ -582,9 +642,13 @@ int show_confirm_dialog(const char *message) {
 
     XftDraw *dlg_draw = XftDrawCreate(dpy, dlg_win, argb_visual, argb_colormap);
 
-    /* grab pointer — stop cursor outside dialog, normal inside */
-    Cursor curs_stop = XCreateFontCursor(dpy, XC_trek);
-    Cursor curs_normal = XCreateFontCursor(dpy, XC_left_ptr);
+    /* grab pointer — stop cursor outside dialog, normal inside.
+     * Cursors are created once and reused across invocations. */
+    static Cursor curs_stop = None, curs_normal = None;
+    if (curs_stop == None) {
+        curs_stop   = XCreateFontCursor(dpy, XC_trek);
+        curs_normal = XCreateFontCursor(dpy, XC_left_ptr);
+    }
     XGrabPointer(dpy, dlg_win, False,
                  ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
                  GrabModeAsync, GrabModeAsync, None, curs_stop, CurrentTime);
@@ -595,7 +659,7 @@ int show_confirm_dialog(const char *message) {
 
     draw_dialog(dlg_draw, dlg_w, dlg_h,
                message, msg_len, msg_w, btn_row_w, focus_btn, pressed_btn);
-    compositor_repaint();
+    compositor_repaint_full();
 
     /* precompute button positions (must match draw_dialog layout) */
     int content_y = DLG_FW + DLG_PAD;
@@ -625,6 +689,7 @@ int show_confirm_dialog(const char *message) {
                 pressed_btn = -1;
                 draw_dialog(dlg_draw, dlg_w, dlg_h,
                            message, msg_len, msg_w, btn_row_w, focus_btn, pressed_btn);
+                compositor_dirty_window(dlg_win);
                 compositor_repaint();
             }
             break;
@@ -645,6 +710,7 @@ int show_confirm_dialog(const char *message) {
                     pressed_btn = 0;
                     draw_dialog(dlg_draw, dlg_w, dlg_h,
                                message, msg_len, msg_w, btn_row_w, focus_btn, pressed_btn);
+                    compositor_dirty_window(dlg_win);
                     compositor_repaint();
                 } else if (ev.xbutton.x >= cancel_emph_x && ev.xbutton.x < cancel_emph_x + cancel_emph_w &&
                            ev.xbutton.y >= emph_y && ev.xbutton.y < emph_y + emph_h) {
@@ -652,6 +718,7 @@ int show_confirm_dialog(const char *message) {
                     pressed_btn = 1;
                     draw_dialog(dlg_draw, dlg_w, dlg_h,
                                message, msg_len, msg_w, btn_row_w, focus_btn, pressed_btn);
+                    compositor_dirty_window(dlg_win);
                     compositor_repaint();
                 }
             }
@@ -679,6 +746,7 @@ int show_confirm_dialog(const char *message) {
                 pressed_btn = -1;
                 draw_dialog(dlg_draw, dlg_w, dlg_h,
                            message, msg_len, msg_w, btn_row_w, focus_btn, pressed_btn);
+                compositor_dirty_window(dlg_win);
                 compositor_repaint();
             }
             break;
@@ -711,6 +779,7 @@ int show_confirm_dialog(const char *message) {
                 if (pressed_btn != old_pressed) {
                     draw_dialog(dlg_draw, dlg_w, dlg_h,
                                message, msg_len, msg_w, btn_row_w, focus_btn, pressed_btn);
+                    compositor_dirty_window(dlg_win);
                     compositor_repaint();
                 }
             }
@@ -733,7 +802,7 @@ int show_confirm_dialog(const char *message) {
 
     XUngrabKeyboard(dpy, CurrentTime);
     XUngrabPointer(dpy, CurrentTime);
-    XFreeCursor(dpy, curs_stop);
+    /* cursors are cached statically — freed only at WM shutdown */
     XFreeCursor(dpy, curs_normal);
     XftDrawDestroy(dlg_draw);
     compositor_untrack_window(dlg_win);

@@ -6,16 +6,42 @@
 
 /* ── pattern drawing helpers ─────────────────────────────────────────── */
 
+/* Build a 2x2-cell tile and fill the whole pixmap with it — one XPutImage
+ * plus a single XFillRectangle instead of thousands of per-cell requests. */
+static void fill_with_tile(Pixmap pm, int w, int h, XftColor *c1, XftColor *c2,
+                           int cell, int tile_w, int tile_h,
+                           void (*paint_tile)(Display *, Drawable, GC, XftColor *, XftColor *, int)) {
+    Pixmap tp = XCreatePixmap(dpy, pm, (unsigned)tile_w, (unsigned)tile_h,
+                              (unsigned)DefaultDepth(dpy, screen));
+    GC tgc = XCreateGC(dpy, tp, 0, NULL);
+    XSetForeground(dpy, tgc, c1->pixel);
+    XFillRectangle(dpy, tp, tgc, 0, 0, tile_w, tile_h);
+    paint_tile(dpy, tp, tgc, c1, c2, cell);
+    XSetTile(dpy, tgc, tp);
+    XSetFillStyle(dpy, tgc, FillTiled);
+    XFillRectangle(dpy, pm, tgc, 0, 0, w, h);
+    XSetFillStyle(dpy, tgc, FillSolid);
+    XFreeGC(dpy, tgc);
+    XFreePixmap(dpy, tp);
+}
+
+static void tile_checker(Display *d, Drawable dr, GC g, XftColor *c1, XftColor *c2, int cell) {
+    (void)d; (void)dr; (void)g; (void)c1;
+    XSetForeground(d, g, c2->pixel);
+    XFillRectangle(d, dr, g, 0, 0, cell, cell);
+    XFillRectangle(d, dr, g, cell, cell, cell, cell);
+}
+
+static void tile_dots(Display *d, Drawable dr, GC g, XftColor *c1, XftColor *c2, int cell) {
+    (void)c1;
+    int r = cell / 4;
+    if (r < 1) r = 1;
+    XSetForeground(d, g, c2->pixel);
+    XFillArc(d, dr, g, cell / 2 - r, cell / 2 - r, r * 2, r * 2, 0, 360 * 64);
+}
+
 static void draw_checkerboard(Pixmap pm, int w, int h, XftColor *c1, XftColor *c2, int cell) {
-    GC gc1 = XCreateGC(dpy, pm, 0, NULL);
-    XSetForeground(dpy, gc1, c1->pixel);
-    XFillRectangle(dpy, pm, gc1, 0, 0, w, h);
-    XSetForeground(dpy, gc1, c2->pixel);
-    for (int y = 0; y < h; y += cell)
-        for (int x = 0; x < w; x += cell)
-            if (((x / cell) + (y / cell)) % 2 == 0)
-                XFillRectangle(dpy, pm, gc1, x, y, cell, cell);
-    XFreeGC(dpy, gc1);
+    fill_with_tile(pm, w, h, c1, c2, cell, cell * 2, cell * 2, tile_checker);
 }
 
 static void draw_hstripes(Pixmap pm, int w, int h, XftColor *c1, XftColor *c2, int cell) {
@@ -43,27 +69,28 @@ static void draw_diagonal_stripes(Pixmap pm, int w, int h, XftColor *c1, XftColo
     XSetForeground(dpy, gc1, c1->pixel);
     XFillRectangle(dpy, pm, gc1, 0, 0, w, h);
     XSetForeground(dpy, gc1, c2->pixel);
-    /* draw diagonal stripe lines using XDrawLine in batches */
+    /* batch all diagonal lines into a single XDrawSegments request */
+    int count = 0;
+    for (int offset = -(h + w); offset < h + w; offset += cell * 2)
+        count += cell;
+    XSegment *segs = malloc(sizeof(XSegment) * (size_t)count);
+    if (!segs) { XFreeGC(dpy, gc1); return; }
+    int i = 0;
     for (int offset = -(h + w); offset < h + w; offset += cell * 2) {
         for (int d = 0; d < cell; d++) {
             int ox = offset + d;
-            XDrawLine(dpy, pm, gc1, ox, 0, ox + h, h);
+            segs[i].x1 = (short)ox;        segs[i].y1 = 0;
+            segs[i].x2 = (short)(ox + h);  segs[i].y2 = (short)h;
+            i++;
         }
     }
+    XDrawSegments(dpy, pm, gc1, segs, count);
+    free(segs);
     XFreeGC(dpy, gc1);
 }
 
 static void draw_dots(Pixmap pm, int w, int h, XftColor *c1, XftColor *c2, int cell) {
-    GC gc1 = XCreateGC(dpy, pm, 0, NULL);
-    XSetForeground(dpy, gc1, c1->pixel);
-    XFillRectangle(dpy, pm, gc1, 0, 0, w, h);
-    XSetForeground(dpy, gc1, c2->pixel);
-    int r = cell / 4;
-    if (r < 1) r = 1;
-    for (int y = cell / 2; y < h; y += cell)
-        for (int x = cell / 2; x < w; x += cell)
-            XFillArc(dpy, pm, gc1, x - r, y - r, r * 2, r * 2, 0, 360 * 64);
-    XFreeGC(dpy, gc1);
+    fill_with_tile(pm, w, h, c1, c2, cell, cell, cell, tile_dots);
 }
 
 static void draw_crosshatch(Pixmap pm, int w, int h, XftColor *c1, XftColor *c2, int cell) {
@@ -71,10 +98,23 @@ static void draw_crosshatch(Pixmap pm, int w, int h, XftColor *c1, XftColor *c2,
     XSetForeground(dpy, gc1, c1->pixel);
     XFillRectangle(dpy, pm, gc1, 0, 0, w, h);
     XSetForeground(dpy, gc1, c2->pixel);
-    for (int offset = -(h + w); offset < h + w; offset += cell)
-        XDrawLine(dpy, pm, gc1, offset, 0, offset + h, h);
-    for (int offset = -(h + w); offset < h + w; offset += cell)
-        XDrawLine(dpy, pm, gc1, offset + h, 0, offset, h);
+    int n = 0;
+    for (int offset = -(h + w); offset < h + w; offset += cell) n++;
+    XSegment *segs = malloc(sizeof(XSegment) * (size_t)n * 2);
+    if (!segs) { XFreeGC(dpy, gc1); return; }
+    int i = 0;
+    for (int offset = -(h + w); offset < h + w; offset += cell) {
+        segs[i].x1 = (short)offset;        segs[i].y1 = 0;
+        segs[i].x2 = (short)(offset + h);  segs[i].y2 = (short)h;
+        i++;
+    }
+    for (int offset = -(h + w); offset < h + w; offset += cell) {
+        segs[i].x1 = (short)(offset + h);  segs[i].y1 = 0;
+        segs[i].x2 = (short)offset;        segs[i].y2 = (short)h;
+        i++;
+    }
+    XDrawSegments(dpy, pm, gc1, segs, i);
+    free(segs);
     XFreeGC(dpy, gc1);
 }
 
@@ -123,8 +163,7 @@ static void load_image_bg(Pixmap pm, int scr_w, int scr_h) {
     XFillRectangle(dpy, pm, gc1, 0, 0, scr_w, scr_h);
     XFreeGC(dpy, gc1);
 
-    Pixmap img_pm = XCreatePixmap(dpy, root, (unsigned)scr_w, (unsigned)scr_h,
-                                   (unsigned)DefaultDepth(dpy, screen));
+    Pixmap img_pm = None;
 
     switch (cfg_bg_mode_image) {
     case BG_CENTERED: {
@@ -169,22 +208,24 @@ static void load_image_bg(Pixmap pm, int scr_w, int scr_h) {
         break;
     }
     case BG_TILED: {
-        /* tile the image */
+        /* tile the image with XSetTile + a single fill */
         Pixmap src_pm = XCreatePixmap(dpy, root, (unsigned)img_w, (unsigned)img_h,
                                        (unsigned)DefaultDepth(dpy, screen));
         imlib_context_set_drawable(src_pm);
         imlib_render_image_on_drawable(0, 0);
         GC gc2 = XCreateGC(dpy, pm, 0, NULL);
-        for (int ty = 0; ty < scr_h; ty += img_h)
-            for (int tx = 0; tx < scr_w; tx += img_w)
-                XCopyArea(dpy, src_pm, pm, gc2, 0, 0,
-                          (unsigned)img_w, (unsigned)img_h, tx, ty);
+        XSetTile(dpy, gc2, src_pm);
+        XSetFillStyle(dpy, gc2, FillTiled);
+        XFillRectangle(dpy, pm, gc2, 0, 0, scr_w, scr_h);
+        XSetFillStyle(dpy, gc2, FillSolid);
         XFreeGC(dpy, gc2);
         XFreePixmap(dpy, src_pm);
         break;
     }
     case BG_STRETCHED: {
         /* scale to exact screen dimensions */
+        img_pm = XCreatePixmap(dpy, root, (unsigned)scr_w, (unsigned)scr_h,
+                               (unsigned)DefaultDepth(dpy, screen));
         imlib_context_set_drawable(img_pm);
         imlib_render_image_on_drawable_at_size(0, 0, scr_w, scr_h);
         GC gc2 = XCreateGC(dpy, pm, 0, NULL);
@@ -214,7 +255,7 @@ static void load_image_bg(Pixmap pm, int scr_w, int scr_h) {
     }
     }
 
-    XFreePixmap(dpy, img_pm);
+    if (img_pm != None) XFreePixmap(dpy, img_pm);
     imlib_context_set_image(img);
     imlib_free_image();
 }
@@ -228,13 +269,21 @@ void bg_load(void) {
         root_bg_pixmap = None;
     }
 
-    Atom xrootpmap = XInternAtom(dpy, "_XROOTPMAP_ID", False);
+    static Atom xrootpmap_cached = None;
+    static int atom_ready = 0;
+    if (!atom_ready) {
+        xrootpmap_cached = XInternAtom(dpy, "_XROOTPMAP_ID", False);
+        atom_ready = 1;
+    }
+    Atom xrootpmap = xrootpmap_cached;
 
     if (cfg_bg_mode == BG_SOLID) {
         XSetWindowBackground(dpy, root, col_root_bg.pixel);
         XClearWindow(dpy, root);
         /* remove pixmap property */
         XDeleteProperty(dpy, root, xrootpmap);
+        /* compositor must re-fetch the cached bg color */
+        compositor_bg_reloaded();
         return;
     }
 
@@ -305,6 +354,9 @@ void bg_load(void) {
     /* set _XROOTPMAP_ID for other programs */
     XChangeProperty(dpy, root, xrootpmap, XA_PIXMAP, 32,
                     PropModeReplace, (unsigned char *)&pm, 1);
+
+    /* compositor must re-fetch the cached bg picture / color */
+    compositor_bg_reloaded();
 }
 
 void bg_free(void) {

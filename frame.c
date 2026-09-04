@@ -9,57 +9,124 @@
  * tw = top bevel width, rw = right, bw = bottom, lw = left.
  * Top/left edges are drawn in light color (highlight).
  * Bottom/right edges are drawn in shadow color.
- * Uses the mwm GE1 staircase mitering algorithm. */
+ * Uses the mwm GE1 staircase mitering algorithm.
+ *
+ * The staircase steps at most once per side, so consecutive scanlines
+ * with identical geometry are coalesced into a single XftDrawRect —
+ * each side collapses to <= 3 rects instead of one per scanline. */
 void bevel_rect(XftDraw *xd, int x, int y, int w, int h,
                        int tw, int rw, int bw, int lw,
                        XftColor *light, XftColor *shadow) {
     if (w <= 0 || h <= 0) return;
 
-    /* top side — highlight */
+    /* top side — highlight: scanlines advance downward (y+i).
+     * Run [i0, i) covers rows y+i0 .. y+i-1 at constant x1/len. */
     int join1 = lw, join2 = rw;
+    int run_x1 = 0, run_len = 0, run_i0 = 0, run_active = 0;
     for (int i = 0; i < tw; i++) {
         int x1 = x + (lw > 0 ? lw - join1 : 0);
         int len = w - (lw > 0 ? lw - join1 : 0) - (rw > 0 ? rw - join2 : 0);
-        if (len > 0 && y + i < y + h)
-            XftDrawRect(xd, light, x1, y + i, len, 1);
+        if (len > 0 && y + i < y + h) {
+            if (run_active && x1 == run_x1 && len == run_len) {
+                /* extend run */
+            } else {
+                if (run_active && run_len > 0)
+                    XftDrawRect(xd, light, run_x1, y + run_i0, run_len, i - run_i0);
+                run_x1 = x1; run_len = len; run_i0 = i; run_active = 1;
+            }
+        } else if (run_active) {
+            /* gap — flush */
+            if (run_len > 0)
+                XftDrawRect(xd, light, run_x1, y + run_i0, run_len, i - run_i0);
+            run_active = 0;
+        }
         if (join1 > 0) join1--;
         if (join2 > 0) join2--;
     }
+    if (run_active && run_len > 0)
+        XftDrawRect(xd, light, run_x1, y + run_i0, run_len, tw - run_i0);
 
-    /* left side — highlight */
+    /* left side — highlight: scanlines advance rightward (x+i).
+     * Run [i0, i) covers cols x+i0 .. x+i-1 at constant y1/height. */
     join1 = tw; int join2b = bw;
+    int run_y1 = 0;
+    run_len = 0; run_i0 = 0; run_active = 0;
     for (int i = 0; i < lw; i++) {
         int y1 = y + (tw > 0 ? tw - join1 : 0);
         int height = h - (tw > 0 ? tw - join1 : 0) - (bw > 0 ? bw - join2b : 0);
-        if (height > 0 && x + i < x + w)
-            XftDrawRect(xd, light, x + i, y1, 1, height);
+        if (height > 0 && x + i < x + w) {
+            if (run_active && y1 == run_y1 && height == run_len) {
+                /* extend run */
+            } else {
+                if (run_active && run_len > 0)
+                    XftDrawRect(xd, light, x + run_i0, run_y1, i - run_i0, run_len);
+                run_y1 = y1; run_len = height; run_i0 = i; run_active = 1;
+            }
+        } else if (run_active) {
+            if (run_len > 0)
+                XftDrawRect(xd, light, x + run_i0, run_y1, i - run_i0, run_len);
+            run_active = 0;
+        }
         if (join1 > 0) join1--;
         if (join2b > 0) join2b--;
     }
+    if (run_active && run_len > 0)
+        XftDrawRect(xd, light, x + run_i0, run_y1, lw - run_i0, run_len);
 
-    /* bottom side — shadow */
+    /* bottom side — shadow: scanlines advance UPWARD (y1 = y+h-1-i).
+     * Run [i0, i) covers rows y+h-i .. y+h-1-i0 at constant x1/len,
+     * so the rect origin is the LAST scanline: y+h-i. */
     join1 = lw; join2 = rw;
+    run_x1 = 0; run_len = 0; run_i0 = 0; run_active = 0;
     for (int i = 0; i < bw; i++) {
         int x1 = x + (lw > 0 ? lw - join1 : 0);
         int len = w - (lw > 0 ? lw - join1 : 0) - (rw > 0 ? rw - join2 : 0);
         int y1 = y + h - 1 - i;
-        if (len > 0 && y1 >= y)
-            XftDrawRect(xd, shadow, x1, y1, len, 1);
+        if (len > 0 && y1 >= y) {
+            if (run_active && x1 == run_x1 && len == run_len) {
+                /* extend run */
+            } else {
+                if (run_active && run_len > 0)
+                    XftDrawRect(xd, shadow, run_x1, y + h - i, run_len, i - run_i0);
+                run_x1 = x1; run_len = len; run_i0 = i; run_active = 1;
+            }
+        } else if (run_active) {
+            if (run_len > 0)
+                XftDrawRect(xd, shadow, run_x1, y + h - i, run_len, i - run_i0);
+            run_active = 0;
+        }
         if (join1 > 0) join1--;
         if (join2 > 0) join2--;
     }
+    if (run_active && run_len > 0)
+        XftDrawRect(xd, shadow, run_x1, y + h - bw, run_len, bw - run_i0);
 
-    /* right side — shadow */
+    /* right side — shadow: scanlines advance LEFTWARD (x1 = x+w-1-i).
+     * Run [i0, i) covers cols x+w-i .. x+w-1-i0, rect origin x+w-i. */
     join1 = tw; join2b = bw;
+    run_y1 = 0; run_len = 0; run_i0 = 0; run_active = 0;
     for (int i = 0; i < rw; i++) {
         int y1 = y + (tw > 0 ? tw - join1 : 0);
         int height = h - (tw > 0 ? tw - join1 : 0) - (bw > 0 ? bw - join2b : 0);
         int x1 = x + w - 1 - i;
-        if (height > 0 && x1 >= x)
-            XftDrawRect(xd, shadow, x1, y1, 1, height);
+        if (height > 0 && x1 >= x) {
+            if (run_active && y1 == run_y1 && height == run_len) {
+                /* extend run */
+            } else {
+                if (run_active && run_len > 0)
+                    XftDrawRect(xd, shadow, x + w - i, run_y1, i - run_i0, run_len);
+                run_y1 = y1; run_len = height; run_i0 = i; run_active = 1;
+            }
+        } else if (run_active) {
+            if (run_len > 0)
+                XftDrawRect(xd, shadow, x + w - i, run_y1, i - run_i0, run_len);
+            run_active = 0;
+        }
         if (join1 > 0) join1--;
         if (join2b > 0) join2b--;
     }
+    if (run_active && run_len > 0)
+        XftDrawRect(xd, shadow, x + w - rw, run_y1, rw - run_i0, run_len);
 }
 
 /* Draw a 3D recessed bevel (shadow on top/left, light on bottom/right) */
@@ -228,7 +295,6 @@ void drawframe(Client *c) {
         XftDrawRect(xd, border_shadow, 0, fh - 1, fw, 1);  /* bottom */
         XftDrawRect(xd, border_shadow, 0, 0, 1, fh);        /* left */
         XftDrawRect(xd, border_shadow, fw - 1, 0, 1, fh);   /* right */
-        XSync(dpy, False);
         return;
     }
 
@@ -287,8 +353,8 @@ void drawframe(Client *c) {
         btn_positions[i] = right_edge - (i + 1) * btn_w;
 
     if (tb_w > 0 && tb_h > 0) {
-        /* Fill entire title row with title bg color */
-        XftDrawRect(xd, title_col, tb_x, tb_y, tb_w, tb_h);
+        /* title row already covered by the full-frame fill (step 1) —
+         * no redundant second fill of the same color */
     }
 
     /* Title text area — raised (or depressed) button */
@@ -416,22 +482,32 @@ void drawframe(Client *c) {
         int max_w = text_right - text_left;
         if (max_w > 0) {
             int namelen = (int)strlen(c->name);
+            /* binary search for the longest prefix that fits max_w
+             * (XftTextExtents8 is not prefix-monotonic with kerning, but
+             * xOff is monotonic in practice for this use) */
             XGlyphInfo ext;
-            XftTextExtents8(dpy, xftfont, (XftChar8 *)c->name, namelen, &ext);
-            while (namelen > 0 && ext.xOff > max_w) {
-                namelen--;
-                XftTextExtents8(dpy, xftfont, (XftChar8 *)c->name, namelen, &ext);
+            int lo = 0, hi = namelen;
+            int best = 0;
+            while (lo <= hi) {
+                int mid = (lo + hi) / 2;
+                if (mid == 0) { lo = mid + 1; continue; }
+                XftTextExtents8(dpy, xftfont, (XftChar8 *)c->name, mid, &ext);
+                if (ext.xOff <= max_w) {
+                    best = mid;
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
             }
-            if (namelen > 0) {
+            if (best > 0) {
                 int text_y = tb_y + (tb_h + xftfont->ascent - xftfont->descent) / 2;
                 XftDrawStringUtf8(xd, &col_title_fg, xftfont,
                                   text_left, text_y,
-                                  (XftChar8 *)c->name, namelen);
+                                  (XftChar8 *)c->name, best);
             }
         }
     }
 
-    XSync(dpy, False);
 }
 
 /* ── update frame ──────────────────────────────────────────────────── */
@@ -441,9 +517,16 @@ void drawframe(Client *c) {
 /* Move and resize the frame shell AND its XmForm child.
  * XMoveResizeWindow alone only resizes the shell's X window — the XmForm
  * child stays at its initial (small) size, causing tiled windows to appear
- * tiny.  We must also resize the form's X window to match. */
+ * tiny.  We must also resize the form's X window to match.
+ * Skips requests when geometry is unchanged (updateframe() runs on every
+ * focus change and must not re-push identical geometry). */
 void moveresizeframe(Client *c) {
     if (!c || !c->frame_shell) return;
+    if (c->x == c->last_x && c->y == c->last_y &&
+        c->w == c->last_w && c->h == c->last_h)
+        return;
+    c->last_x = c->x; c->last_y = c->y;
+    c->last_w = c->w; c->last_h = c->h;
     XMoveResizeWindow(dpy, XtWindow(c->frame_shell), c->x, c->y, c->w, c->h);
     if (c->frame_form)
         XResizeWindow(dpy, XtWindow(c->frame_form), c->w, c->h);
@@ -453,6 +536,16 @@ void updateframe(Client *c) {
     if (!c || !c->frame_shell) return;
     moveresizeframe(c);
     drawframe(c);
+}
+
+/* set cursor on the frame form window, skipping redundant protocol requests */
+static void frame_set_cursor(Client *c, Cursor cur) {
+    Window fw = XtWindow(c->frame_form);
+    if (c->last_cursor_win != fw || c->last_cursor != cur) {
+        XDefineCursor(dpy, fw, cur);
+        c->last_cursor = cur;
+        c->last_cursor_win = fw;
+    }
 }
 
 /* ── frame event callbacks ─────────────────────────────────────────── */
@@ -473,9 +566,9 @@ void frame_enter_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) 
         /* set cursor based on where the pointer entered */
         int edge = frame_edge_hit(c, ev->xcrossing.x, ev->xcrossing.y);
         if (edge != EDGE_NONE && edge > 0 && edge < 16 && curs_resize[edge])
-            XDefineCursor(dpy, XtWindow(c->frame_form), curs_resize[edge]);
+            frame_set_cursor(c, curs_resize[edge]);
         else
-            XDefineCursor(dpy, XtWindow(c->frame_form), curs_default);
+            frame_set_cursor(c, curs_default);
     }
 }
 
@@ -483,7 +576,7 @@ void frame_leave_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) 
     (void)w; (void)cont;
     Client *c = (Client *)client_data;
     if (ev->type == LeaveNotify)
-        XDefineCursor(dpy, XtWindow(c->frame_form), curs_default);
+        frame_set_cursor(c, curs_default);
 }
 
 void frame_motion_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) {
@@ -492,9 +585,9 @@ void frame_motion_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont)
     if (ev->type == MotionNotify && c->pressed_btn == BTN_NONE) {
         int edge = frame_edge_hit(c, ev->xmotion.x, ev->xmotion.y);
         if (edge != EDGE_NONE && edge > 0 && edge < 16 && curs_resize[edge])
-            XDefineCursor(dpy, XtWindow(c->frame_form), curs_resize[edge]);
+            frame_set_cursor(c, curs_resize[edge]);
         else
-            XDefineCursor(dpy, XtWindow(c->frame_form), curs_default);
+            frame_set_cursor(c, curs_default);
     }
 }
 

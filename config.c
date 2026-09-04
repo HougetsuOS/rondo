@@ -3,6 +3,8 @@
  */
 #include "wm.h"
 #include <limits.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 /* ── runtime config variables ─────────────────────────────────────────── */
 
@@ -944,8 +946,20 @@ static void cfg_apply_form(CfgNode *form) {
             k.arg.v = NULL;
         }
 
-        /* append to keys array */
-        cfg_keys = realloc(cfg_keys, sizeof(Key) * (size_t)(cfg_num_keys + 1));
+        /* append to keys array — grow with doubling capacity to avoid
+         * O(N²) realloc/copy churn for large binding sets.
+         * keys_cap tracks the CURRENT cfg_keys allocation; reset to 0
+         * whenever cfg_keys is reset elsewhere (reload frees + NULLs it). */
+        static int keys_cap = 0;
+        if (cfg_keys == NULL)
+            keys_cap = 0;
+        if (cfg_num_keys >= keys_cap) {
+            int new_cap = keys_cap ? keys_cap * 2 : 32;
+            Key *nk = realloc(cfg_keys, sizeof(Key) * (size_t)new_cap);
+            if (!nk) { fprintf(stderr, "rondo: out of memory (keys)\n"); return; }
+            cfg_keys = nk;
+            keys_cap = new_cap;
+        }
         cfg_keys[cfg_num_keys++] = k;
         return;
     }
@@ -1096,6 +1110,9 @@ static void cfg_set_defaults(void) {
 
 /* ── file reading ────────────────────────────────────────────────────── */
 
+/* path of the config file actually loaded (set by cfg_read_file) */
+static char cfg_loaded_path[PATH_MAX];
+
 static char *cfg_read_file(void) {
     const char *home = getenv("HOME");
     if (!home) return NULL;
@@ -1113,8 +1130,9 @@ static char *cfg_read_file(void) {
         f = fopen(path, "r");
     }
 
-    if (!f) return NULL;
+    if (!f) { cfg_loaded_path[0] = '\0'; return NULL; }
 
+    snprintf(cfg_loaded_path, sizeof(cfg_loaded_path), "%s", path);
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
@@ -1176,7 +1194,30 @@ void cfg_init(void) {
 }
 
 void cfg_reload(void) {
-    cfg_set_defaults();
+    /* skip the full re-parse when the config file is unchanged */
+    {
+        static time_t last_mtime = 0;
+        static off_t  last_size = 0;
+        static int    have_stat = 0;
+        struct stat st;
+        if (have_stat && cfg_loaded_path[0] &&
+            stat(cfg_loaded_path, &st) == 0 &&
+            st.st_mtime == last_mtime && st.st_size == last_size)
+            return;
+        if (cfg_loaded_path[0] && stat(cfg_loaded_path, &st) == 0) {
+            last_mtime = st.st_mtime;
+            last_size = st.st_size;
+        }
+        have_stat = 1;
+    }
+
+    /* install defaults only on first init — reloading re-applies them
+     * from the parsed file; the alloc/copy/free churn is wasted work */
+    static int defaults_installed = 0;
+    if (!defaults_installed) {
+        cfg_set_defaults();
+        defaults_installed = 1;
+    }
 
     /* save old arena — strings from old config are still live until
      * new config is fully applied and X resources reloaded */
@@ -1200,6 +1241,9 @@ void cfg_reload(void) {
     /* now that new strings are in use, free the old arena */
     arena_free_saved();
 
+    /* menu labels/extents may have changed */
+    menu_extents_gen++;
+
     /* reload X resources */
     load_colors();
 
@@ -1221,28 +1265,40 @@ void cfg_reload(void) {
         }
     }
 
-    /* tooltip font */
+    /* tooltip font — skip reopen when unchanged (also invalidate when
+     * the main font changed, since tooltip defaults to it) */
     {
+        static char prev_tfont[256] = "";
+        static char prev_main_font[256] = "";
         const char *tfont = cfg_tooltip_font ? cfg_tooltip_font : cfg_font_name;
-        XftFont *new_tf = XftFontOpenName(dpy, screen, tfont);
-        if (new_tf) {
-            if (tooltip_font != xftfont) XftFontClose(dpy, tooltip_font);
-            tooltip_font = new_tf;
+        if (strcmp(tfont, prev_tfont) != 0 ||
+            strcmp(cfg_font_name, prev_main_font) != 0) {
+            XftFont *new_tf = XftFontOpenName(dpy, screen, tfont);
+            if (new_tf) {
+                if (tooltip_font != xftfont) XftFontClose(dpy, tooltip_font);
+                tooltip_font = new_tf;
+                strncpy(prev_tfont, tfont, sizeof(prev_tfont) - 1);
+                strncpy(prev_main_font, cfg_font_name, sizeof(prev_main_font) - 1);
+            }
         }
     }
 
     /* key grabs */
     grabkeys();
 
-    /* reallocate workspace coordinate arrays if workspace count changed */
+    /* reallocate workspace coordinate arrays only when the count changed */
     {
+        static int last_num_ws = -1;
         int new_num = cfg_num_workspaces;
-        int *new_ws_x = realloc(ws_x, (size_t)new_num * sizeof(int));
-        int *new_ws_y = realloc(ws_y, (size_t)new_num * sizeof(int));
-        if (new_ws_x) { ws_x = new_ws_x; memset(ws_x, 0, (size_t)new_num * sizeof(int)); }
-        if (new_ws_y) { ws_y = new_ws_y; memset(ws_y, 0, (size_t)new_num * sizeof(int)); }
-        /* clamp current workspace if it was removed */
-        if (curws >= new_num) curws = new_num - 1;
+        if (new_num != last_num_ws) {
+            int *new_ws_x = realloc(ws_x, (size_t)new_num * sizeof(int));
+            int *new_ws_y = realloc(ws_y, (size_t)new_num * sizeof(int));
+            if (new_ws_x) { ws_x = new_ws_x; memset(ws_x, 0, (size_t)new_num * sizeof(int)); }
+            if (new_ws_y) { ws_y = new_ws_y; memset(ws_y, 0, (size_t)new_num * sizeof(int)); }
+            /* clamp current workspace if it was removed */
+            if (curws >= new_num) curws = new_num - 1;
+            last_num_ws = new_num;
+        }
     }
 
     /* bar and icon bar windows — reposition based on current config */

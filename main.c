@@ -13,6 +13,7 @@ Window barwin;
 Window iconbar;
 Window checkwin;
 int running = 1;
+int wm_restarting = 0;
 int (*xerrorxlib)(Display *, XErrorEvent *);
 
 XtAppContext app;
@@ -155,42 +156,97 @@ fail:
     return 0;
 }
 
+/* load an xft color into *xc, skipping the XAllocColor round trip when
+ * the requested name is unchanged from the previous load */
+static int xftcolor_load_cached(const char *name, XftColor *xc, char **prev_name) {
+    if (*prev_name && strcmp(*prev_name, name) == 0)
+        return 1;  /* unchanged — keep existing allocation */
+    XftColor tmp;
+    if (!XftColorAllocName(dpy, xvisual, xcolormap, name, &tmp)) {
+        fprintf(stderr, "rondo: cannot allocate xft color '%s'\n", name);
+        return 0;
+    }
+    /* free the old pixel when the name actually changed */
+    if (*prev_name && xc->pixel)
+        XftColorFree(dpy, xvisual, xcolormap, xc);
+    *xc = tmp;
+    if (!*prev_name) {
+        *prev_name = malloc(128);
+        if (!*prev_name) return 1;
+    }
+    snprintf(*prev_name, 128, "%s", name);
+    return 1;
+}
+
+static int xftcolor_load_argb_cached(const char *name, XftColor *xc, char **prev_name) {
+    if (*prev_name && strcmp(*prev_name, name) == 0)
+        return 1;
+    /* reuse the plain loader for the first allocation, then track names */
+    XftColor tmp = {0};
+    char *unused = NULL;
+    /* temporarily load into tmp via the non-caching path */
+    XftColor old = *xc;
+    if (!xftcolor_load_argb(name, &tmp)) {
+        fprintf(stderr, "rondo: cannot allocate ARGB color '%s'\n", name);
+        return 0;
+    }
+    if (*prev_name && old.pixel)
+        XftColorFree(dpy, argb_visual, argb_colormap, &old);
+    *xc = tmp;
+    (void)unused;
+    if (!*prev_name) {
+        *prev_name = malloc(128);
+        if (!*prev_name) return 1;
+    }
+    snprintf(*prev_name, 128, "%s", name);
+    return 1;
+}
+
 void load_colors(void) {
+    static char *pn_bar_bg, *pn_bar_fg, *pn_ws_active, *pn_ws_occupied,
+                *pn_ws_idle, *pn_ws_bg, *pn_bar_bl, *pn_bar_bs, *pn_bar_fill,
+                *pn_menu_bg, *pn_iconbar_bg, *pn_dlg_bg,
+                *pn_title_f, *pn_title_u, *pn_title_fg,
+                *pn_frame_l, *pn_frame_s, *pn_frame_bg, *pn_btn_fg,
+                *pn_active_l, *pn_active_s,
+                *pn_fb_bg, *pn_fb_l, *pn_fb_s, *pn_fb_fg,
+                *pn_tt_bg, *pn_tt_fg, *pn_tt_b,
+                *pn_root_bg, *pn_root_bg2;
     /* ARGB colors (drawn on bar, iconbar, menu, dialog — need alpha channel) */
-    xftcolor_load_argb(color_bar_bg,          &col_bar_bg);
-    xftcolor_load_argb(color_bar_fg,          &col_bar_fg);
-    xftcolor_load_argb(color_bar_ws_active,   &col_bar_ws_active);
-    xftcolor_load_argb(color_bar_ws_occupied, &col_bar_ws_occupied);
-    xftcolor_load_argb(color_bar_ws_idle,     &col_bar_ws_idle);
-    xftcolor_load_argb(color_bar_ws_bg,       &col_bar_ws_bg);
-    xftcolor_load_argb(color_bar_border_light,  &col_bar_border_light);
-    xftcolor_load_argb(color_bar_border_shadow, &col_bar_border_shadow);
-    xftcolor_load_argb(color_bar_fill,          &col_bar_fill);
-    xftcolor_load_argb(color_menu_bg,        &col_menu_bg);
-    xftcolor_load_argb(color_iconbar_bg,     &col_iconbar_bg);
-    xftcolor_load_argb(color_dialog_bg,      &col_dlg_bg);
+    xftcolor_load_argb_cached(color_bar_bg,          &col_bar_bg,          &pn_bar_bg);
+    xftcolor_load_argb_cached(color_bar_fg,          &col_bar_fg,          &pn_bar_fg);
+    xftcolor_load_argb_cached(color_bar_ws_active,   &col_bar_ws_active,   &pn_ws_active);
+    xftcolor_load_argb_cached(color_bar_ws_occupied, &col_bar_ws_occupied, &pn_ws_occupied);
+    xftcolor_load_argb_cached(color_bar_ws_idle,     &col_bar_ws_idle,     &pn_ws_idle);
+    xftcolor_load_argb_cached(color_bar_ws_bg,       &col_bar_ws_bg,       &pn_ws_bg);
+    xftcolor_load_argb_cached(color_bar_border_light,  &col_bar_border_light,  &pn_bar_bl);
+    xftcolor_load_argb_cached(color_bar_border_shadow, &col_bar_border_shadow, &pn_bar_bs);
+    xftcolor_load_argb_cached(color_bar_fill,          &col_bar_fill,          &pn_bar_fill);
+    xftcolor_load_argb_cached(color_menu_bg,        &col_menu_bg,        &pn_menu_bg);
+    xftcolor_load_argb_cached(color_iconbar_bg,     &col_iconbar_bg,     &pn_iconbar_bg);
+    xftcolor_load_argb_cached(color_dialog_bg,      &col_dlg_bg,         &pn_dlg_bg);
 
     /* Default-visual colors (frames, title, tooltips, root — no alpha needed) */
-    xftcolor_load(color_title_focus,     &col_title_focus);
-    xftcolor_load(color_title_unfocus,   &col_title_unfocus);
-    xftcolor_load(color_title_fg,        &col_title_fg);
-    xftcolor_load(color_frame_light,     &col_frame_light);
-    xftcolor_load(color_frame_shadow,    &col_frame_shadow);
-    xftcolor_load(color_frame_bg,        &col_frame_bg);
-    xftcolor_load(color_btn_fg,          &col_btn_fg);
-    xftcolor_load(color_active_light,    &col_active_light);
-    xftcolor_load(color_active_shadow,   &col_active_shadow);
+    xftcolor_load_cached(color_title_focus,     &col_title_focus,     &pn_title_f);
+    xftcolor_load_cached(color_title_unfocus,   &col_title_unfocus,   &pn_title_u);
+    xftcolor_load_cached(color_title_fg,        &col_title_fg,        &pn_title_fg);
+    xftcolor_load_cached(color_frame_light,     &col_frame_light,     &pn_frame_l);
+    xftcolor_load_cached(color_frame_shadow,    &col_frame_shadow,    &pn_frame_s);
+    xftcolor_load_cached(color_frame_bg,        &col_frame_bg,        &pn_frame_bg);
+    xftcolor_load_cached(color_btn_fg,          &col_btn_fg,          &pn_btn_fg);
+    xftcolor_load_cached(color_active_light,    &col_active_light,    &pn_active_l);
+    xftcolor_load_cached(color_active_shadow,   &col_active_shadow,   &pn_active_s);
 
-    xftcolor_load(color_fb_bg,          &col_fb_bg);
-    xftcolor_load(color_fb_light,       &col_fb_light);
-    xftcolor_load(color_fb_shadow,      &col_fb_shadow);
-    xftcolor_load(color_fb_fg,          &col_fb_fg);
-    xftcolor_load(color_tooltip_bg,     &col_tooltip_bg);
-    xftcolor_load(color_tooltip_fg,     &col_tooltip_fg);
-    xftcolor_load(color_tooltip_border, &col_tooltip_border);
+    xftcolor_load_cached(color_fb_bg,          &col_fb_bg,          &pn_fb_bg);
+    xftcolor_load_cached(color_fb_light,       &col_fb_light,       &pn_fb_l);
+    xftcolor_load_cached(color_fb_shadow,      &col_fb_shadow,      &pn_fb_s);
+    xftcolor_load_cached(color_fb_fg,          &col_fb_fg,          &pn_fb_fg);
+    xftcolor_load_cached(color_tooltip_bg,     &col_tooltip_bg,     &pn_tt_bg);
+    xftcolor_load_cached(color_tooltip_fg,     &col_tooltip_fg,     &pn_tt_fg);
+    xftcolor_load_cached(color_tooltip_border, &col_tooltip_border, &pn_tt_b);
 
-    xftcolor_load(color_root_bg,        &col_root_bg);
-    xftcolor_load(color_root_bg2,       &col_root_bg2);
+    xftcolor_load_cached(color_root_bg,        &col_root_bg,        &pn_root_bg);
+    xftcolor_load_cached(color_root_bg2,       &col_root_bg2,       &pn_root_bg2);
 }
 
 /* ── geometry helpers ─────────────────────────────────────────────────── */
@@ -259,6 +315,32 @@ int xerror(Display *d, XErrorEvent *e) {
 }
 
 /* ── setup ──────────────────────────────────────────────────────────── */
+
+#include <fcntl.h>
+
+/* ── entry ──────────────────────────────────────────────────────────── */
+
+/* SIGTERM/SIGINT: perform the same clean handover as an in-WM restart —
+ * leave client windows mapped and parented (skip withdraw/reparent) so the
+ * next WM instance's startup scan adopts them with full decorations.
+ * The handler only writes to a self-pipe (async-signal-safe); the Xt input
+ * callback sets running=0 so the main loop exits and runs cleanup(). */
+static int term_pipe[2] = { -1, -1 };
+
+static void term_signal_handler(int sig) {
+    (void)sig;
+    char c = 1;
+    if (term_pipe[1] >= 0)
+        (void)!write(term_pipe[1], &c, 1);
+}
+
+static void term_pipe_cb(XtPointer cl, int *fd, XtInputId *id) {
+    (void)cl; (void)fd; (void)id;
+    char c;
+    while (read(term_pipe[0], &c, 1) == 1) { }
+    wm_restarting = 1;
+    running = 0;
+}
 
 void setup(int *argc, char **argv) {
     XtToolkitInitialize();
@@ -337,7 +419,6 @@ void setup(int *argc, char **argv) {
 
     /* GC */
     gc = XCreateGC(dpy, root, 0, NULL);
-    icon_gc = XCreateGC(dpy, root, 0, NULL);
 
     /* XOR GC for rubber-band outlines (mwm-style: GXinvert + IncludeInferiors) */
     {
@@ -399,7 +480,6 @@ void setup(int *argc, char **argv) {
     /* do NOT map iconbar here — it's mapped only when minimized windows exist */
 
     iconbar_draw = XftDrawCreate(dpy, iconbar, argb_visual, argb_colormap);
-    XFreeGC(dpy, icon_gc);
     icon_gc = XCreateGC(dpy, iconbar, 0, NULL);
 
     /* tooltip window (override-redirect, initially unmapped) */
@@ -415,6 +495,14 @@ void setup(int *argc, char **argv) {
     /* grab keys */
     grabkeys();
     ipc_init();
+
+    /* self-pipe for signal-safe main-loop wakeup */
+    if (pipe(term_pipe) == 0) {
+        fcntl(term_pipe[0], F_SETFL, O_NONBLOCK);
+        fcntl(term_pipe[1], F_SETFL, O_NONBLOCK);
+        XtAppAddInput(app, term_pipe[0], (XtPointer)XtInputReadMask,
+                      term_pipe_cb, NULL);
+    }
 
     /* cursors for resize handles */
     curs_default   = XCreateFontCursor(dpy, XC_left_ptr);
@@ -435,59 +523,71 @@ void setup(int *argc, char **argv) {
                 GrabModeAsync, GrabModeAsync, None, None);
 
     /* EWMH support */
+    /* intern all atoms in one round trip (XInternAtoms).
+     * XInternAtoms fills a flat Atom array — copy results into the globals. */
+    {
+        Atom ids[37];
+        const char *names[] = {
+            "WM_PROTOCOLS", "WM_DELETE_WINDOW", "WM_TAKE_FOCUS",
+            "WM_STATE", "WM_CHANGE_STATE", "WM_NORMAL_HINTS",
+            "WM_COLORMAP_WINDOWS",
+            "_NET_SUPPORTED", "_NET_CLIENT_LIST",
+            "_NET_NUMBER_OF_DESKTOPS", "_NET_CURRENT_DESKTOP",
+            "_NET_DESKTOP_VIEWPORT", "_NET_WORKAREA",
+            "_NET_ACTIVE_WINDOW", "_NET_CLOSE_WINDOW",
+            "_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN",
+            "_NET_WM_DESKTOP", "_NET_WM_NAME",
+            "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DIALOG",
+            "_NET_WM_WINDOW_TYPE_DOCK", "_NET_WM_WINDOW_TYPE_TOOLBAR",
+            "_NET_WM_WINDOW_TYPE_UTILITY", "_NET_WM_WINDOW_TYPE_SPLASH",
+            "_NET_WM_WINDOW_TYPE_POPUP_MENU",
+            "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU",
+            "_NET_WM_WINDOW_TYPE_TOOLTIP",
+            "_NET_WM_WINDOW_TYPE_NOTIFICATION",
+            "_MOTIF_WM_HINTS", "_NET_WM_WINDOW_OPACITY",
+            "_NET_WM_CM_S0",
+            "_NET_SYSTEM_TRAY_S0", "_NET_SYSTEM_TRAY_VISUAL",
+            "_NET_SYSTEM_TRAY_OPCODE", "MANAGER", "_XEMBED",
+        };
+        int na = (int)(sizeof(names) / sizeof(names[0]));
+        if (XInternAtoms(dpy, (char **)names, na, False, ids)) {
+            Atom *out[] = {
+                &wm_protocols, &wm_delete_window, &wm_take_focus,
+                &wm_state, &wm_change_state, &wm_normal_hints,
+                &wm_colormap_windows,
+                &net_supported, &net_client_list,
+                &net_number_of_desktops, &net_current_desktop,
+                &net_desktop_viewport, &net_workarea,
+                &net_active_window, &net_close_window,
+                &net_wm_state, &net_wm_state_fullscreen,
+                &net_wm_desktop, &net_wm_name_atom,
+                &net_wm_window_type, &net_wm_window_type_dialog,
+                &net_wm_window_type_dock, &net_wm_window_type_toolbar,
+                &net_wm_window_type_utility, &net_wm_window_type_splash,
+                &net_wm_window_type_popup_menu,
+                &net_wm_window_type_dropdown_menu,
+                &net_wm_window_type_tooltip,
+                &net_wm_window_type_notification,
+                &motif_wm_hints, &net_wm_window_opacity,
+                &net_wm_cm_s0,
+                &net_system_tray, &net_system_tray_visual,
+                &net_system_tray_opcode, &manager_atom, &xembed,
+            };
+            for (int i = 0; i < na; i++) *out[i] = ids[i];
+        } else {
+            fprintf(stderr, "rondo: XInternAtoms failed — atom-based protocols disabled\n");
+        }
+    }
     Atom net_supporting = XInternAtom(dpy, "_NET_SUPPORTING_WM_CHECK", False);
-    Atom net_wm_name    = XInternAtom(dpy, "_NET_WM_NAME", False);
+    Atom utf8_string    = XInternAtom(dpy, "UTF8_STRING", False);
     checkwin = XCreateSimpleWindow(dpy, root, -1, -1, 1, 1, 0, 0, 0);
     XChangeProperty(dpy, checkwin, net_supporting, XA_WINDOW, 32,
                     PropModeReplace, (unsigned char *)&checkwin, 1);
     XChangeProperty(dpy, root, net_supporting, XA_WINDOW, 32,
                     PropModeReplace, (unsigned char *)&checkwin, 1);
-    XChangeProperty(dpy, checkwin, net_wm_name,
-                    XInternAtom(dpy, "UTF8_STRING", False), 8,
+    XChangeProperty(dpy, checkwin, net_wm_name_atom,
+                    utf8_string, 8,
                     PropModeReplace, (unsigned char *)"rondo", 5);
-
-    /* ICCCM atoms */
-    wm_protocols      = XInternAtom(dpy, "WM_PROTOCOLS", False);
-    wm_delete_window  = XInternAtom(dpy, "WM_DELETE_WINDOW", False);
-    wm_take_focus     = XInternAtom(dpy, "WM_TAKE_FOCUS", False);
-    wm_state          = XInternAtom(dpy, "WM_STATE", False);
-    wm_change_state   = XInternAtom(dpy, "WM_CHANGE_STATE", False);
-    wm_normal_hints   = XInternAtom(dpy, "WM_NORMAL_HINTS", False);
-    wm_colormap_windows = XInternAtom(dpy, "WM_COLORMAP_WINDOWS", False);
-
-    /* EWMH atoms */
-    net_supported      = XInternAtom(dpy, "_NET_SUPPORTED", False);
-    net_client_list    = XInternAtom(dpy, "_NET_CLIENT_LIST", False);
-    net_number_of_desktops = XInternAtom(dpy, "_NET_NUMBER_OF_DESKTOPS", False);
-    net_current_desktop = XInternAtom(dpy, "_NET_CURRENT_DESKTOP", False);
-    net_desktop_viewport = XInternAtom(dpy, "_NET_DESKTOP_VIEWPORT", False);
-    net_workarea       = XInternAtom(dpy, "_NET_WORKAREA", False);
-    net_active_window   = XInternAtom(dpy, "_NET_ACTIVE_WINDOW", False);
-    net_close_window    = XInternAtom(dpy, "_NET_CLOSE_WINDOW", False);
-    net_wm_state        = XInternAtom(dpy, "_NET_WM_STATE", False);
-    net_wm_state_fullscreen = XInternAtom(dpy, "_NET_WM_STATE_FULLSCREEN", False);
-    net_wm_desktop      = XInternAtom(dpy, "_NET_WM_DESKTOP", False);
-    net_wm_name_atom    = XInternAtom(dpy, "_NET_WM_NAME", False);
-    net_wm_window_type  = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE", False);
-    net_wm_window_type_dialog = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DIALOG", False);
-    net_wm_window_type_dock = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DOCK", False);
-    net_wm_window_type_toolbar = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_TOOLBAR", False);
-    net_wm_window_type_utility = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_UTILITY", False);
-    net_wm_window_type_splash       = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_SPLASH", False);
-    net_wm_window_type_popup_menu   = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_POPUP_MENU", False);
-    net_wm_window_type_dropdown_menu = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU", False);
-    net_wm_window_type_tooltip      = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_TOOLTIP", False);
-    net_wm_window_type_notification  = XInternAtom(dpy, "_NET_WM_WINDOW_TYPE_NOTIFICATION", False);
-    motif_wm_hints                  = XInternAtom(dpy, "_MOTIF_WM_HINTS", False);
-    net_wm_window_opacity           = XInternAtom(dpy, "_NET_WM_WINDOW_OPACITY", False);
-    net_wm_cm_s0                    = XInternAtom(dpy, "_NET_WM_CM_S0", False);
-
-    /* system tray atoms */
-    net_system_tray        = XInternAtom(dpy, "_NET_SYSTEM_TRAY_S0", False);
-    net_system_tray_visual = XInternAtom(dpy, "_NET_SYSTEM_TRAY_VISUAL", False);
-    net_system_tray_opcode = XInternAtom(dpy, "_NET_SYSTEM_TRAY_OPCODE", False);
-    manager_atom           = XInternAtom(dpy, "MANAGER", False);
-    xembed                 = XInternAtom(dpy, "_XEMBED", False);
 
     /* set _NET_SUPPORTED — announce which EWMH atoms we support */
     {
@@ -504,7 +604,7 @@ void setup(int *argc, char **argv) {
             net_wm_window_type_dropdown_menu, net_wm_window_type_tooltip,
             net_wm_window_type_notification,
             net_system_tray,
-            net_supporting, net_wm_name
+            net_supporting, net_wm_name_atom
         };
         XChangeProperty(dpy, root, net_supported, XA_ATOM, 32,
                         PropModeReplace, (unsigned char *)supported,
@@ -520,6 +620,37 @@ void setup(int *argc, char **argv) {
         XtNheight, 1,
         NULL);
     XtRealizeWidget(toplevel_shell);
+
+    /* adopt already-mapped client windows (WM restart / session handover):
+     * unmanaged mapped windows would otherwise sit frameless and dead —
+     * MapRequest only fires for (re)maps, not for windows mapped before
+     * we selected SubstructureRedirect */
+    {
+        Window dum_r, dum_p, *kids = NULL;
+        unsigned int nk = 0;
+        if (XQueryTree(dpy, root, &dum_r, &dum_p, &kids, &nk) && kids) {
+            for (unsigned int i = 0; i < nk; i++) {
+                if (!kids[i]) continue;
+                if (kids[i] == XtWindow(toplevel_shell)) continue;
+                XWindowAttributes wa;
+                if (!XGetWindowAttributes(dpy, kids[i], &wa)) continue;
+                if (wa.override_redirect) continue;
+                if (wa.map_state != IsViewable) continue;
+                /* skip leftovers from a previous rondo instance (its bar,
+                 * icon bar, frames): those carry no WM_CLASS / the RondoWm
+                 * class, while every real client has a WM_CLASS */
+                XClassHint ch;
+                if (!XGetClassHint(dpy, kids[i], &ch))
+                    continue;  /* no class at all → WM-internal leftover */
+                int is_rondo = (ch.res_class && strcmp(ch.res_class, "RondoWm") == 0);
+                if (ch.res_name) XFree(ch.res_name);
+                if (ch.res_class) XFree(ch.res_class);
+                if (is_rondo) continue;
+                manage(kids[i], &wa);
+            }
+            XFree(kids);
+        }
+    }
 
     /* apply background (solid, pattern, or image) */
     bg_load();
@@ -632,14 +763,46 @@ void restart_wm(void) {
     exe[len] = '\0';
     /* prevent X I/O errors from aborting during cleanup */
     XSetIOErrorHandler(restart_ioerr);
+    wm_restarting = 1;
     cleanup();
     execl(exe, exe, (char *)NULL);
     _exit(1);
 }
 
+/* ── deferred batching ─────────────────────────────────────────────── */
+
+int defer_dirty = 0;
+XtIntervalId defer_timer = 0;
+
+static void defer_cb(XtPointer client_data, XtIntervalId *id) {
+    (void)client_data; (void)id;
+    defer_timer = 0;
+    defer_flush();
+}
+
+void defer_schedule(void) {
+    if (defer_timer) return;
+    defer_dirty = 1;
+    defer_timer = XtAppAddTimeOut(app, 0, defer_cb, NULL);
+}
+
+void defer_flush(void) {
+    if (!defer_dirty) return;
+    defer_dirty = 0;
+    arrange();
+    /* the bar widgets read /proc, sysinfo, statvfs etc. — only refresh
+     * them at the timer rate, not on every event-driven flush */
+    drawbar();
+    updateiconbar();
+    update_client_list();
+    compositor_repaint();
+}
+
 /* ── entry ──────────────────────────────────────────────────────────── */
 
 int main(int argc, char *argv[]) {
+    signal(SIGTERM, term_signal_handler);
+    signal(SIGINT, term_signal_handler);
     if (argc > 1 && strcmp(argv[1], "-v") == 0) {
         puts("rondo-0.1");
         return 0;
