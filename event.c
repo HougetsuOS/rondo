@@ -134,7 +134,40 @@ void handle_clientmessage(XClientMessageEvent *ev) {
 }
 
 void handle_configurenotify(XConfigureEvent *ev) {
+    /* client window reconfigured itself under the WM (e.g. GTK splash ->
+     * main-window transition resizes between map and manage): sync the
+     * frame to the client's actual size.  Only trusted for floating
+     * windows whose size we did not just set ourselves (send_configure_
+     * notify events are synthetic; real ones have send_event == 0 and
+     * come from the X server when the client resizes). */
     if (ev->window != root) {
+        Client *c = wintoclient(ev->window);
+        if (c && !ev->send_event && c->is_floating) {
+            int want_cw = ev->width, want_ch = ev->height;
+            int fw, fh;
+            client_to_frame(want_cw, want_ch, &fw, &fh, c->no_decor);
+            if (fw != c->w || fh != c->h) {
+                /* honor the app's min/max before adopting the size */
+                if (c->size_hints_flags & PMinSize) {
+                    if (want_cw < c->min_width)  want_cw = c->min_width;
+                    if (want_ch < c->min_height) want_ch = c->min_height;
+                }
+                if (c->size_hints_flags & PMaxSize) {
+                    if (want_cw > c->max_width)  want_cw = c->max_width;
+                    if (want_ch > c->max_height) want_ch = c->max_height;
+                }
+                client_to_frame(want_cw, want_ch, &fw, &fh, c->no_decor);
+                if (fw != c->w || fh != c->h) {
+                    c->w = fw; c->h = fh;
+                    moveresizeframe(c);
+                    int cx, cy, ncw, nch;
+                    frame_to_client(c->w, c->h, &cx, &cy, &ncw, &nch, c->no_decor);
+                    XMoveResizeWindow(dpy, c->win, cx, cy, ncw, nch);
+                    updateframe(c);
+                    send_configure_notify(c);
+                }
+            }
+        }
         /* non-root ConfigureNotify: invalidate compositor cached picture */
         compositor_configure_window(ev->window);
         return;

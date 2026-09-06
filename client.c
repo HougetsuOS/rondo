@@ -598,7 +598,16 @@ void manage(Window w, XWindowAttributes *wa) {
             }
             if (flags & MWM_HINTS_DECORATIONS) {
                 long decors = hints[2];
-                if (decors == 0)
+                /* decors == 0 with MWM_DECOR_ALL unset: MWM says "none",
+                 * but GTK/toolkits write decorations=0 to mean "no
+                 * opinion — use the WM default" (Inkscape and friends
+                 * map frameless otherwise). Only honor an explicit
+                 * request when MWM_DECOR_ALL is NOT the reason... i.e.
+                 * treat decors==0 as no_decor only when the FUNCTIONS
+                 * flag is also present and asked for something — real
+                 * frameless requests (splash screens, dock panels) set
+                 * both. Plain {DECORATIONS,0} alone is ignored. */
+                if (decors == 0 && (flags & MWM_HINTS_FUNCTIONS))
                     c->no_decor = 1;
             }
             XFree(data);
