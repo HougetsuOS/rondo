@@ -2,6 +2,7 @@
  * rondo — status bar and icon bar
  */
 #include "wm.h"
+#include "xmplat_seam.h"
 #include <time.h>
 #include <Imlib2.h>
 #include <sys/sysinfo.h>
@@ -632,8 +633,12 @@ static void drawbar_horizontal(void) {
     int bar_h = BAR_HEIGHT;
 
     /* bar background fill */
-    XSetForeground(dpy, gc, col_bar_fill.pixel);
-    XFillRectangle(dpy, barwin, argb_gc, 0, 0, bar_w, bar_h);
+    {
+        XmPlatDrawCtx c = _XmPlatCtx(dpy, barwin, argb_gc);
+        _XmPlatSetForeground(c, col_bar_fill.pixel);
+        _XmPlatFillRect(c, 0, 0, (unsigned)bar_w, (unsigned)bar_h);
+        _XmPlatCtxFree(c);
+    }
 
     draw_bar_border(xftdraw, bw, cs, border_light, border_shadow, bar_w, bar_h);
 
@@ -718,8 +723,12 @@ static void drawbar_vertical(void) {
     int interior_w = interior_right - interior_left;
 
     /* bar background fill */
-    XSetForeground(dpy, gc, col_bar_fill.pixel);
-    XFillRectangle(dpy, barwin, argb_gc, 0, 0, bar_w, bar_h);
+    {
+        XmPlatDrawCtx c = _XmPlatCtx(dpy, barwin, argb_gc);
+        _XmPlatSetForeground(c, col_bar_fill.pixel);
+        _XmPlatFillRect(c, 0, 0, (unsigned)bar_w, (unsigned)bar_h);
+        _XmPlatCtxFree(c);
+    }
 
     draw_bar_border(xftdraw, bw, cs, border_light, border_shadow, bar_w, bar_h);
 
@@ -997,8 +1006,12 @@ static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw,
             /* With mask: render onto a temp pixmap filled with the bar
              * background, then cache it with a scaled clip mask. */
             Pixmap tmp = XCreatePixmap(dpy, target, (unsigned)sw, (unsigned)sh, 32);
-            XSetForeground(dpy, argb_gc, col_iconbar_bg.pixel);
-            XFillRectangle(dpy, tmp, argb_gc, 0, 0, sw, sh);
+            {
+                XmPlatDrawCtx c = _XmPlatCtx(dpy, tmp, argb_gc);
+                _XmPlatSetForeground(c, col_iconbar_bg.pixel);
+                _XmPlatFillRect(c, 0, 0, (unsigned)sw, (unsigned)sh);
+                _XmPlatCtxFree(c);
+            }
             imlib_context_set_image(img);
             {
                 Visual *prev_vis = imlib_context_get_visual();
@@ -1016,12 +1029,12 @@ static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw,
              * scale client-side, and write rows with XPutImage (single
              * request instead of per-pixel XDrawPoint). */
             Pixmap scaled_mask = XCreatePixmap(dpy, target, (unsigned)sw, (unsigned)sh, 1);
-            XImage *mask_ximg = XGetImage(dpy, c->icon_mask, 0, 0,
-                                           (unsigned)c->icon_w, (unsigned)c->icon_h,
-                                           AllPlanes, XYPixmap);
+            XmPlatImage mask_img = _XmPlatImageFromSurface2(dpy, c->icon_mask, 0, 0,
+                                                             (unsigned)c->icon_w,
+                                                             (unsigned)c->icon_h);
             char *scaled_bits = malloc((size_t)((sw + 7) / 8) * (size_t)sh);
             int have_mask_data = 0;
-            if (mask_ximg && scaled_bits) {
+            if (mask_img && scaled_bits) {
                 memset(scaled_bits, 0, (size_t)((sw + 7) / 8) * (size_t)sh);
                 /* Sample original mask pixels with nearest-neighbor scaling.
                  * Bitmap bit order for clip masks is LSBFirst per byte. */
@@ -1029,36 +1042,39 @@ static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw,
                     for (int sx = 0; sx < sw; sx++) {
                         int src_x = sx * c->icon_w / sw;
                         int src_y = sy * c->icon_h / sh;
-                        if (XGetPixel(mask_ximg, src_x, src_y)) {
+                        if (_XmPlatImageGetPixel(mask_img, src_x, src_y)) {
                             scaled_bits[sy * ((sw + 7) / 8) + (sx >> 3)]
                                 |= (char)(1 << (sx & 7));
                         }
                     }
                 }
                 have_mask_data = 1;
-                XDestroyImage(mask_ximg);
+                _XmPlatImageFree(mask_img);
             }
             GC mono_gc = XCreateGC(dpy, scaled_mask, 0, NULL);
             if (have_mask_data) {
-                XImage *out = XCreateImage(dpy, NULL, 1, XYPixmap, 0,
-                                           scaled_bits,
-                                           (unsigned)sw, (unsigned)sh, 8,
-                                           (sw + 7) / 8);
+                /* 1-bit LSBFirst XYBitmap token over caller-owned bits;
+                 * _XmPlatPutImage uploads it in one request */
+                XmPlatImage out = _XmPlatImageCreateBitmap(dpy, scaled_bits,
+                                                            (unsigned)sw,
+                                                            (unsigned)sh);
                 if (out) {
-                    out->bitmap_bit_order = LSBFirst;
-                    out->byte_order = LSBFirst;
-                    XPutImage(dpy, scaled_mask, mono_gc, out, 0, 0, 0, 0,
-                              (unsigned)sw, (unsigned)sh);
-                    XDestroyImage(out);  /* frees scaled_bits */
+                    XmPlatDrawCtx mc = _XmPlatCtx(dpy, scaled_mask, mono_gc);
+                    _XmPlatPutImage(mc, out, 0, 0, 0, 0,
+                                    (unsigned)sw, (unsigned)sh);
+                    _XmPlatCtxFree(mc);
+                    _XmPlatImageFree(out);  /* frees scaled_bits */
                     scaled_bits = NULL;
                 }
             } else {
                 /* Fallback: no mask data, make everything opaque */
-                XSetForeground(dpy, mono_gc, 1);
-                XFillRectangle(dpy, scaled_mask, mono_gc, 0, 0, sw, sh);
+                XmPlatDrawCtx mc = _XmPlatCtx(dpy, scaled_mask, mono_gc);
+                _XmPlatSetForeground(mc, 1);
+                _XmPlatFillRect(mc, 0, 0, (unsigned)sw, (unsigned)sh);
+                _XmPlatCtxFree(mc);
             }
             XFreeGC(dpy, mono_gc);
-            free(scaled_bits);  /* no-op when ownership moved to the XImage */
+            free(scaled_bits);  /* no-op when ownership moved to the image token */
 
             /* cache the temp pixmap (with its clip mask) for future draws */
             c->icon_scaled_pm = tmp;
@@ -1088,15 +1104,16 @@ static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw,
     }
 
     /* blit the cached scaled icon to the target */
-    if (c->icon_mask != None) {
-        XSetClipMask(dpy, argb_gc, c->icon_scaled_mask);
-        XSetClipOrigin(dpy, argb_gc, ox, oy);
-        XCopyArea(dpy, c->icon_scaled_pm, target, argb_gc, 0, 0,
-                  (unsigned)sw, (unsigned)sh, ox, oy);
-        XSetClipMask(dpy, argb_gc, None);
-    } else {
-        XCopyArea(dpy, c->icon_scaled_pm, target, argb_gc, 0, 0,
-                  (unsigned)sw, (unsigned)sh, ox, oy);
+    {
+        XmPlatDrawCtx cctx = _XmPlatCtx(dpy, target, argb_gc);
+        XmPlatSurface src = _XmPlatSurface(dpy, c->icon_scaled_pm);
+        if (c->icon_mask != None) {
+            _XmPlatBlitMask(cctx, src, _XmPlatSurface(dpy, c->icon_scaled_mask),
+                            0, 0, ox, oy, (unsigned)sw, (unsigned)sh);
+        } else {
+            _XmPlatBlit(cctx, src, 0, 0, ox, oy, (unsigned)sw, (unsigned)sh);
+        }
+        _XmPlatCtxFree(cctx);
     }
 }
 
@@ -1302,7 +1319,12 @@ static void drawiconbar_vertical(void) {
     }
 
     /* copy back-buffer to window in one shot */
-    XCopyArea(dpy, buf, iconbar, argb_gc, 0, 0, (unsigned)g.ibar_w, (unsigned)g.ibar_h, 0, 0);
+    {
+        XmPlatDrawCtx cctx = _XmPlatCtx(dpy, iconbar, argb_gc);
+        _XmPlatBlit(cctx, _XmPlatSurface(dpy, buf), 0, 0, 0, 0,
+                    (unsigned)g.ibar_w, (unsigned)g.ibar_h);
+        _XmPlatCtxFree(cctx);
+    }
     XFlush(dpy);
 }
 
@@ -1436,7 +1458,12 @@ static void drawiconbar_horizontal(void) {
     }
 
     /* copy back-buffer to window in one shot */
-    XCopyArea(dpy, buf, iconbar, argb_gc, 0, 0, (unsigned)g.ibar_w, (unsigned)g.ibar_h, 0, 0);
+    {
+        XmPlatDrawCtx cctx = _XmPlatCtx(dpy, iconbar, argb_gc);
+        _XmPlatBlit(cctx, _XmPlatSurface(dpy, buf), 0, 0, 0, 0,
+                    (unsigned)g.ibar_w, (unsigned)g.ibar_h);
+        _XmPlatCtxFree(cctx);
+    }
     XFlush(dpy);
 }
 

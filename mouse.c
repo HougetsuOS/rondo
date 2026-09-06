@@ -2,13 +2,16 @@
  * rondo — mouse move/resize interaction
  */
 #include "wm.h"
+#include "xmplat_seam.h"
 
 /* Draw a thick rectangle outline on the root window using the XOR GC.
  * Draws OUTLINE_THICKNESS concentric rectangles to create a thick band,
  * matching mwm's SetOutline approach. */
 void draw_outline(int x, int y, int w, int h) {
+    XmPlatDrawCtx c = _XmPlatCtx(dpy, root, xor_gc);
     for (int i = 0; i < OUTLINE_THICKNESS; i++)
-        XDrawRectangle(dpy, root, xor_gc, x + i, y + i, w - 2*i, h - 2*i);
+        _XmPlatDrawRect(c, x + i, y + i, (unsigned)(w - 2*i), (unsigned)(h - 2*i));
+    _XmPlatCtxFree(c);
 }
 
 void mousemove(Client *c, int button, int edge, int x_root, int y_root) {
