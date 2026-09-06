@@ -22,6 +22,12 @@ void mousemove(Client *c, int button, int edge, int x_root, int y_root) {
         c->oldx = c->x; c->oldy = c->y;
         c->oldw = c->w; c->oldh = c->h;
         c->is_floating = 1;
+        {
+            int cx, cy, cw, ch;
+            frame_to_client(c->w, c->h, &cx, &cy, &cw, &ch, c->no_decor);
+            c->req_width = cw;
+            c->req_height = ch;
+        }
         float_default_size(c);
         client_to_frame(c->w, c->h, &c->w, &c->h, c->no_decor);
         if (button == Button1) {

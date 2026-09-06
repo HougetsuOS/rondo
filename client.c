@@ -261,10 +261,36 @@ void restore_client(Client *c) {
 
 /* ── floating geometry ───────────────────────────────────────────────── */
 
+/* Compute the frame size for making a window floating.
+ * Uses the client size in c->req_width/req_height (set by the caller:
+ * the initial map size in manage, the current tiled size on un-float),
+ * clamped to the app's WM_SIZE_HINTS min/max and capped at half the
+ * usable area so a huge requested size doesn't swallow the screen. */
 void float_default_size(Client *c) {
     BarGeometry g = calc_bar_geometry();
-    c->w = g.w / 2;
-    c->h = g.h / 2;
+    int cw = c->req_width, ch = c->req_height;
+
+    /* clamp to the app's own min/max hints */
+    if (c->size_hints_flags & PMinSize) {
+        if (cw < c->min_width)  cw = c->min_width;
+        if (ch < c->min_height) ch = c->min_height;
+    }
+    if (c->size_hints_flags & PMaxSize) {
+        if (cw > c->max_width)  cw = c->max_width;
+        if (ch > c->max_height) ch = c->max_height;
+    }
+    if (cw < 1) cw = 1;
+    if (ch < 1) ch = 1;
+
+    /* cap at half the usable area (but never below the app's minimum) */
+    int cap_w = g.w / 2, cap_h = g.h / 2;
+    if (cap_w < c->min_width)  cap_w = c->min_width;
+    if (cap_h < c->min_height) cap_h = c->min_height;
+    if (cw > cap_w) cw = cap_w;
+    if (ch > cap_h) ch = cap_h;
+
+    /* convert client size to frame size and store */
+    client_to_frame(cw, ch, &c->w, &c->h, c->no_decor);
 }
 
 /* ── focus / unfocus ─────────────────────────────────────────────────── */
@@ -376,18 +402,37 @@ void manage(Window w, XWindowAttributes *wa) {
     c->fade_timer = 0;
     c->fade_done_cb = NULL;
 
+    /* apply window-type flags now — before size hints / geometry so a
+     * splash's no_decor is reflected in the initial frame size */
+    if (wtype_dialog)
+        c->is_floating = 1;
+    if (wtype_splash) {
+        c->is_floating = 1;
+        c->no_decor = 1;
+        c->no_resize = 1;
+    }
+
     /* transient windows are floating */
     Window trans = None;
     if (XGetTransientForHint(dpy, w, &trans) && trans != None)
         c->is_floating = 1;
 
-    /* compute frame geometry from client's requested size */
-    int fw, fh;
-    client_to_frame(wa->width, wa->height, &fw, &fh, c->no_decor);
+    /* read size hints BEFORE computing geometry — the requested floating
+     * size must respect the app's min/max (GTK apps like Inkscape set
+     * PMinSize to their natural content size; squeezing below it or
+     * forcing a bigger window than wanted breaks their layout) */
+    read_size_hints(c);
 
-    /* position floating windows below the bar, cascaded */
+    /* remember the app's requested client size for float_default_size */
+    c->req_width = wa->width;
+    c->req_height = wa->height;
+
+    /* position floating windows below the bar, cascaded.
+     * The app's requested size is honored, clamped to its own size
+     * hints and capped at half the usable area; size hints were read
+     * above so min/max are known here. */
     float_default_size(c);
-    client_to_frame(c->w, c->h, &fw, &fh, c->no_decor);
+    int fw = c->w, fh = c->h;
     int idx = 0;
     for (Client *p = clients; p; p = p->next)
         if (p != c && p->is_floating && p->ws == curws) idx++;
@@ -528,16 +573,9 @@ void manage(Window w, XWindowAttributes *wa) {
             XFree(protocols);
         }
     }
-    read_size_hints(c);
-
-    /* apply window-type flags determined at the top of manage() */
-    if (wtype_dialog)
-        c->is_floating = 1;
-    if (wtype_splash) {
-        c->is_floating = 1;
-        c->no_decor = 1;
-        c->no_resize = 1;
-    }
+    /* size hints were already read before geometry computation above;
+     * window-type flags were also applied before geometry (splash
+     * no_decor must be known before frame sizing) */
 
     /* read _MOTIF_WM_HINTS — decorations and functions */
     {

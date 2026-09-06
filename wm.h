@@ -87,6 +87,7 @@ struct Client {
     Cursor last_cursor;         /* last cursor set on frame_form (None if never) */
     Window last_cursor_win;     /* window the cursor was set on */
     int oldx, oldy, oldw, oldh; /* saved floating geometry */
+    int req_width, req_height;  /* requested client size for float sizing */
     int ws;               /* workspace index */
     int is_floating;
     int is_fullscreen;

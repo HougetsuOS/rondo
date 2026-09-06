@@ -190,7 +190,14 @@ void togglefloat(const WmArg *arg) {
         focused->oldw = focused->w;
         focused->oldh = focused->h;
         focused->is_floating = 1;
-        /* give a reasonable floating size — cascade position */
+        /* keep the current size as the floating size */
+        {
+            int cx, cy, cw, ch;
+            frame_to_client(focused->w, focused->h, &cx, &cy, &cw, &ch,
+                            focused->no_decor);
+            focused->req_width = cw;
+            focused->req_height = ch;
+        }
         float_default_size(focused);
         client_to_frame(focused->w, focused->h, &focused->w, &focused->h, focused->no_decor);
         /* count existing floating windows to determine cascade offset */
