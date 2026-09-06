@@ -483,6 +483,38 @@ void run(void) {
                             }
                         } else if (ev.xproperty.atom == wm_normal_hints) {
                             read_size_hints(c);
+                            /* GTK splash -> main-window transition: the app
+                             * raises its minimum size then resizes itself.
+                             * Enforce the new minimum right away so the
+                             * frame snaps to full size in one step instead
+                             * of visibly growing (floating only; tiled
+                             * windows are re-clamped by the next arrange). */
+                            if (c->is_floating && !c->is_minimized) {
+                                int fboff = c->no_decor ? 0 : FRAME_WIDTH;
+                                int toff  = c->no_decor ? 0 : TITLE_HEIGHT;
+                                int cw = c->w - 2 * fboff;
+                                int ch = c->h - 2 * fboff - toff;
+                                int nw = cw, nh = ch;
+                                if (c->size_hints_flags & PMinSize) {
+                                    if (nw < c->min_width)  nw = c->min_width;
+                                    if (nh < c->min_height) nh = c->min_height;
+                                }
+                                if (c->size_hints_flags & PMaxSize) {
+                                    if (nw > c->max_width)  nw = c->max_width;
+                                    if (nh > c->max_height) nh = c->max_height;
+                                }
+                                if (nw != cw || nh != ch) {
+                                    int fw, fh;
+                                    client_to_frame(nw, nh, &fw, &fh, c->no_decor);
+                                    c->w = fw; c->h = fh;
+                                    moveresizeframe(c);
+                                    int cx, cy, ncw, nch;
+                                    frame_to_client(c->w, c->h, &cx, &cy, &ncw, &nch, c->no_decor);
+                                    XMoveResizeWindow(dpy, c->win, cx, cy, ncw, nch);
+                                    updateframe(c);
+                                    send_configure_notify(c);
+                                }
+                            }
                         } else if (ev.xproperty.atom == net_wm_window_opacity) {
                             compositor_opacity_changed(c->win);
                             compositor_opacity_changed(XtWindow(c->frame_shell));
