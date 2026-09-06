@@ -158,6 +158,11 @@ static void trk_remove(Window w)
             if (trk[i].client_damage) XDamageDestroy(dpy, trk[i].client_damage);
             if (trk[i].form_damage)   XDamageDestroy(dpy, trk[i].form_damage);
             if (trk[i].picture)       XRenderFreePicture(dpy, trk[i].picture);
+            /* the window is going away: mark its rect dirty so the next
+             * repaint clears it from the root buffer.  Without this, an
+             * abruptly-destroyed window (client killed / ctrl+d unmap
+             * path) leaves its last composited image stuck on screen. */
+            dirty_add_win(&trk[i]);
             trk[i] = trk[--ntrk];
             children_dirty = 1;
             return;
@@ -245,18 +250,25 @@ void compositor_untrack_window(Window w)
     trk_remove(w);
     /* also check if w is a client/form window tracked inside a frame's TrkWin */
     for (int i = 0; i < ntrk; i++) {
+        int frame_changed = 0;
         if (trk[i].client_win == w) {
             if (trk[i].client_damage)
                 XDamageDestroy(dpy, trk[i].client_damage);
             trk[i].client_win = None;
             trk[i].client_damage = None;
+            frame_changed = 1;
         }
         if (trk[i].form_win == w) {
             if (trk[i].form_damage)
                 XDamageDestroy(dpy, trk[i].form_damage);
             trk[i].form_win = None;
             trk[i].form_damage = None;
+            frame_changed = 1;
         }
+        /* the frame's content changed underneath it (grandchild destroyed)
+         * — dirty the frame rect so the next repaint picks it up */
+        if (frame_changed)
+            dirty_add_win(&trk[i]);
     }
 }
 
