@@ -136,13 +136,17 @@ void handle_clientmessage(XClientMessageEvent *ev) {
 void handle_configurenotify(XConfigureEvent *ev) {
     /* client window reconfigured itself under the WM (e.g. GTK splash ->
      * main-window transition resizes between map and manage): sync the
-     * frame to the client's actual size.  Only trusted for floating
-     * windows whose size we did not just set ourselves (send_configure_
-     * notify events are synthetic; real ones have send_event == 0 and
-     * come from the X server when the client resizes). */
+     * frame to the client's actual size.
+     * ONLY for the client's own window — the frame shell also delivers
+     * ConfigureNotify (Xt selects StructureNotify on shells), and
+     * treating the frame size as a client size made the frame grow
+     * without end ("resizing like crazy" on every move/resize).  The
+     * client window is unmapped-and-reparented by us, so a real
+     * client-side resize is the only source of these events. */
     if (ev->window != root) {
         Client *c = wintoclient(ev->window);
-        if (c && !ev->send_event && c->is_floating) {
+        if (c && ev->window == c->win && !ev->send_event &&
+            c->is_floating && !c->dragging) {
             int want_cw = ev->width, want_ch = ev->height;
             int fw, fh;
             client_to_frame(want_cw, want_ch, &fw, &fh, c->no_decor);

@@ -94,6 +94,7 @@ struct Client {
     int is_minimized;
     int is_hidden;         /* hidden by workspace switch */
     int pressed_btn;       /* button being held down (BTN_NONE..BTN_TITLE), or 0 */
+    int dragging;          /* mousemove() drag in progress on this client */
     int no_decor;          /* no frame decorations requested */
     int no_resize;         /* resize disabled */
     int no_minimize;       /* minimize disabled */

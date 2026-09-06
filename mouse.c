@@ -87,6 +87,7 @@ void mousemove(Client *c, int button, int edge, int x_root, int y_root) {
     XGrabKeyboard(dpy, grab_win, False, GrabModeAsync, GrabModeAsync, CurrentTime);
 
     XGrabServer(dpy);
+    c->dragging = 1;
 
     /* draw initial rubber-band at current position + show feedback window */
     int cur_x = orig_x, cur_y = orig_y, cur_w = orig_w, cur_h = orig_h;
@@ -173,6 +174,7 @@ void mousemove(Client *c, int button, int edge, int x_root, int y_root) {
             XUngrabPointer(dpy, CurrentTime);
             XFlush(dpy);
             /* apply final geometry */
+            c->dragging = 0;
             c->x = cur_x; c->y = cur_y; c->w = cur_w; c->h = cur_h;
             moveresizeframe(c);
             {
