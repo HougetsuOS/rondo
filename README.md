@@ -1,5 +1,8 @@
 # rondo
 
+> NOTE: please link this against our own fork of motif:
+>     https://github.com/HougetsuOS/motif
+
 A tiling window manager for X11 that reproduces the visual style of the
 Motif Window Manager (mwm / CDE).
 
