@@ -199,7 +199,7 @@ static void set_defaults(void) {
     strcpy(cfg.col_bar_border_shadow, "#2F4F50");
     strcpy(cfg.col_bar_fill, "#5F9EA0");
     strcpy(cfg.col_menu_bg, "#D4D4D4");
-    strcpy(cfg.col_iconbar_bg, "#D4D4D4");
+    strcpy(cfg.col_iconbar_bg, "#00000000");
     strcpy(cfg.col_fb_bg, "#5F9EA0");
     strcpy(cfg.col_fb_light, "#B7D4D5");
     strcpy(cfg.col_fb_shadow, "#2F4F50");

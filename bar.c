@@ -1175,6 +1175,19 @@ void drawiconbar(void) {
         drawiconbar_horizontal();
 }
 
+
+/* Hard-clear a rect of the 32-bit icon-bar back-buffer to alpha 0.
+ * XftDrawRect blends with PictOpOver and can never reduce alpha, so a
+ * transparent iconbar-bg needs an explicit GXclear pass first. */
+static void ibar_clear_rect(XftDraw *xd, Drawable buf, int x, int y, int w, int h) {
+    (void)xd;
+    XGCValues gv;
+    gv.function = GXclear;
+    GC gcv = XCreateGC(dpy, buf, GCFunction, &gv);
+    XFillRectangle(dpy, buf, gcv, x, y, (unsigned)w, (unsigned)h);
+    XFreeGC(dpy, gcv);
+}
+
 /* Ensure the icon bar back-buffer pixmap matches the current size.
  * Returns the XftDraw for the back-buffer (creating/recreating as needed).
  * Sizes are tracked locally — no XGetGeometry round trip per draw. */
@@ -1200,12 +1213,19 @@ static XftDraw *iconbar_ensure_buf(int w, int h) {
 static void drawiconbar_vertical(void) {
     int entry_h = icon_entry_h();
     BarGeometry g = calc_bar_geometry();
+    { static int traced = 0; if (!traced) { traced = 1;
+        fprintf(stderr, "ibar trace: bg='#%02x%02x%02x%02x' pixel=%08lx entry_h=%d ibar=%lux %dx%d\n",
+            col_iconbar_bg.color.red>>8, col_iconbar_bg.color.green>>8,
+            col_iconbar_bg.color.blue>>8, col_iconbar_bg.color.alpha>>8,
+            col_iconbar_bg.pixel, entry_h, (unsigned long)iconbar, g.ibar_w, g.ibar_h); } }
 
     /* use back-buffer to avoid flicker */
     XftDraw *xd = iconbar_ensure_buf(g.ibar_w, g.ibar_h);
     Drawable buf = iconbar_buf;
 
-    /* clear the entire icon bar before redrawing */
+    /* clear the entire icon bar before redrawing (GXclear first so a
+     * transparent bg writes alpha 0 instead of blending over stale data) */
+    ibar_clear_rect(xd, buf, 0, 0, g.ibar_w, g.ibar_h);
     XftDrawRect(xd, &col_iconbar_bg, 0, 0, g.ibar_w, g.ibar_h);
 
     /* calculate total icon content height */
@@ -1306,6 +1326,7 @@ static void drawiconbar_vertical(void) {
     /* draw arrow buttons on top of icons so they cover any Imlib2 overflow */
     if (need_up) {
         int ay = arrow_top;
+        ibar_clear_rect(xd, buf, 0, ay, ICON_W, arrow_h);
         XftDrawRect(xd, &col_iconbar_bg, 0, ay, ICON_W, arrow_h);
         XftDrawRect(xd, &col_frame_bg, 2, ay + 2, ICON_W - 4, arrow_h - 4);
         bevel_rect(xd, 0, ay, ICON_W, arrow_h,
@@ -1319,6 +1340,7 @@ static void drawiconbar_vertical(void) {
     }
     if (need_down) {
         int ay = arrow_bot - arrow_h;
+        ibar_clear_rect(xd, buf, 0, ay, ICON_W, arrow_h);
         XftDrawRect(xd, &col_iconbar_bg, 0, ay, ICON_W, arrow_h);
         XftDrawRect(xd, &col_frame_bg, 2, ay + 2, ICON_W - 4, arrow_h - 4);
         bevel_rect(xd, 0, ay, ICON_W, arrow_h,
@@ -1350,7 +1372,8 @@ static void drawiconbar_horizontal(void) {
     XftDraw *xd = iconbar_ensure_buf(g.ibar_w, g.ibar_h);
     Drawable buf = iconbar_buf;
 
-    /* clear the entire icon bar */
+    /* clear the entire icon bar (GXclear first, see drawiconbar_vertical) */
+    ibar_clear_rect(xd, buf, 0, 0, g.ibar_w, g.ibar_h);
     XftDrawRect(xd, &col_iconbar_bg, 0, 0, g.ibar_w, g.ibar_h);
 
     int n = minimized_count();
@@ -1445,6 +1468,7 @@ static void drawiconbar_horizontal(void) {
     /* draw arrow buttons on top of icons so they cover any Imlib2 overflow */
     if (need_left) {
         int ax = arrow_left;
+        ibar_clear_rect(xd, buf, ax, 0, arrow_w, entry_h);
         XftDrawRect(xd, &col_iconbar_bg, ax, 0, arrow_w, entry_h);
         XftDrawRect(xd, &col_frame_bg, ax + 2, 2, arrow_w - 4, entry_h - 4);
         bevel_rect(xd, ax, 0, arrow_w, entry_h,
@@ -1458,6 +1482,7 @@ static void drawiconbar_horizontal(void) {
     }
     if (need_right) {
         int ax = arrow_right - arrow_w;
+        ibar_clear_rect(xd, buf, ax, 0, arrow_w, entry_h);
         XftDrawRect(xd, &col_iconbar_bg, ax, 0, arrow_w, entry_h);
         XftDrawRect(xd, &col_frame_bg, ax + 2, 2, arrow_w - 4, entry_h - 4);
         bevel_rect(xd, ax, 0, arrow_w, entry_h,
