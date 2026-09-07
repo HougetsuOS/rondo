@@ -2041,6 +2041,10 @@ static void create_compositing_panel(Widget parent) {
 
 /* ── Background preview ─────────────────────────────────────────────── */
 
+#include <Imlib2.h>
+
+/* ── Background preview ─────────────────────────────────────────────── */
+
 /* XmOptionMenu does not fire XmNvalueChangedCallback for mouse
  * pulldown selections in all paths — attach activate callbacks to the
  * pulldown's push-button gadgets instead. */
@@ -2083,27 +2087,27 @@ static void bg_preview_draw(Widget w) {
     XFillRectangle(d, win, gc, 0, 0, (unsigned)W, (unsigned)H);
 
     int mode = option_menu_index(w_bg_mode);
-    if (mode == 2) {   /* Image: stylized placeholder — a photo-ish wedge */
-        gv.foreground = c2;
-        XChangeGC(d, gc, GCForeground, &gv);
-        /* simple "mountain + sun" silhouette so the mode is obvious */
-        {
-            XPoint tri[4] = {
-                { (short)(W * 1 / 8),  (short)H },
-                { (short)(W * 2 / 5),  (short)(H * 1 / 4) },
-                { (short)(W * 5 / 8),  (short)H },
-            };
-            XFillPolygon(d, win, gc, tri, 3, Convex, CoordModeOrigin);
-            XPoint tri2[4] = {
-                { (short)(W * 3 / 8),  (short)H },
-                { (short)(W * 11 / 16), (short)(H * 3 / 8) },
-                { (short)(W * 15 / 16), (short)H },
-            };
-            XFillPolygon(d, win, gc, tri2, 3, Convex, CoordModeOrigin);
-            /* sun */
-            XFillArc(d, win, gc,
-                     (int)(W * 2 / 3), (int)(H * 1 / 8),
-                     (unsigned)(H / 4), (unsigned)(H / 4), 0, 360 * 64);
+    if (mode == 2) {   /* Image: render the actual image scaled into view */
+        char *path = XmTextGetString(w_bg_image_path);
+        if (path && path[0]) {
+            Imlib_Image img = imlib_load_image(path);
+            if (img) {
+                imlib_context_set_image(img);
+                int iw = imlib_image_get_width();
+                int ih = imlib_image_get_height();
+                /* scale to fill, centered crop (like scale-filled) */
+                double sx = (double)W / iw, sy = (double)H / ih;
+                double sc = sx > sy ? sx : sy;
+                int dw = (int)(iw * sc), dh = (int)(ih * sc);
+                int dx = (W - dw) / 2, dy = (H - dh) / 2;
+                imlib_context_set_display(d);
+                imlib_context_set_visual(DefaultVisual(d, DefaultScreen(d)));
+                imlib_context_set_colormap(DefaultColormap(d, DefaultScreen(d)));
+                imlib_context_set_drawable(win);
+                imlib_render_image_on_drawable_at_size(dx, dy, dw, dh);
+                imlib_free_image_and_decache();
+            }
+            XtFree(path);
         }
     }
     else if (mode == 1) {   /* Pattern */

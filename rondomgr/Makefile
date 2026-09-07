@@ -1,9 +1,9 @@
 CC      = gcc
 CFLAGS  = -std=c99 -Wall -Wextra -pedantic -O2 \
           $(shell pkg-config --cflags motif 2>/dev/null || echo "-I/usr/include/Xm") \
-          $(shell pkg-config --cflags x11 xft 2>/dev/null)
+          $(shell pkg-config --cflags x11 xft imlib2 2>/dev/null)
 # X libs + imlib-free deps (Motif linked separately, see MOTIF_LIBS)
-LDFLAGS = $(shell pkg-config --libs x11 xft 2>/dev/null)
+LDFLAGS = $(shell pkg-config --libs x11 xft imlib2 2>/dev/null)
 
 # Motif link: prefer static (pkg-config motif-static) so the binary does not
 # depend on libXm.so.4 at runtime; falls back to shared -lXm.
