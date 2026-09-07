@@ -1,6 +1,6 @@
 # rondomgr Improvement Plan
 
-Status: P1 + P2 complete; P3.2 complete; P3.1/P3.3 pending
+Status: P1 + P2 + P3 complete; P4 optional polish pending
 Created: 2026-09-07
 
 Audit findings from driving rondomgr under Xvfb and diffing `~/.rondorc`
@@ -51,7 +51,7 @@ before/after an "Apply & Reload".
 
 ## P3 — Editors
 
-### 3.1 Bar-layout editor ✅
+### 3.1 Bar-layout editor ✅ (this commit)
 - Currently round-tripped but not editable. Add: list of (widget, align)
   rows with add/remove/up/down controls, options = ws, title, clock, load,
   mem, disk, bat, vol, cpu, net, temp, tray.

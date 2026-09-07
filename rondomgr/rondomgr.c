@@ -1238,6 +1238,149 @@ static void color_swatch_cb(Widget w, XtPointer client_data, XtPointer call_data
     XtManageChild(dlg);
 }
 
+/* bar layout editor */
+static Widget w_layout_list;
+static Widget make_option_menu(Widget parent, const char *name,
+                               char **labels, int count, int default_idx);
+static int option_menu_index(Widget om);
+
+static const char *layout_align_str(int a) { return a == 0 ? "left" : "right"; }
+
+static void refresh_layout_list(void) {
+    if (!w_layout_list) return;
+    XmListDeleteAllItems(w_layout_list);
+    for (int i = 0; i < num_bar_widgets; i++) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "%-6s %s",
+                 widget_type_str(bar_layout[i].type),
+                 layout_align_str(bar_layout[i].align));
+        XmString it = XmStringCreateLocalized(buf);
+        XmListAddItem(w_layout_list, it, i + 1);
+        XmStringFree(it);
+    }
+}
+
+/* layout edit dialog: two option menus (widget type, alignment) */
+typedef struct { Widget dlg; Widget type_om; Widget align_om; int edit_idx; } LayoutDlg;
+
+static void layout_dlg_cb(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w;
+    LayoutDlg *ld = (LayoutDlg *)client_data;
+    XmSelectionBoxCallbackStruct *cbs = (XmSelectionBoxCallbackStruct *)call_data;
+    if (cbs && cbs->reason == XmCR_OK) {
+        int t = option_menu_index(ld->type_om);
+        int a = option_menu_index(ld->align_om);
+        if (ld->edit_idx >= 0 && ld->edit_idx < num_bar_widgets) {
+            bar_layout[ld->edit_idx].type = t;
+            bar_layout[ld->edit_idx].align = a;
+        } else if (num_bar_widgets < 32) {
+            bar_layout[num_bar_widgets].type = t;
+            bar_layout[num_bar_widgets].align = a;
+            num_bar_widgets++;
+        }
+        refresh_layout_list();
+    }
+    XtDestroyWidget(XtParent(w));
+    free(ld);
+}
+
+static void layout_add_edit_dlg(int edit_idx) {
+    LayoutDlg *ld = calloc(1, sizeof(LayoutDlg));
+    ld->edit_idx = edit_idx;
+
+    Widget dlg = XmCreatePromptDialog(toplevel, "layoutEdit", NULL, 0);
+    XtUnmanageChild(XmSelectionBoxGetChild(dlg, XmDIALOG_TEXT));
+    XtUnmanageChild(XmSelectionBoxGetChild(dlg, XmDIALOG_SELECTION_LABEL));
+    XmString title = XmStringCreateLocalized(edit_idx >= 0 ? "Edit Bar Widget"
+                                                           : "Add Bar Widget");
+    XtVaSetValues(dlg, XmNdialogTitle, title, NULL);
+    XmStringFree(title);
+
+    Widget form = XtVaCreateWidget("lf", xmFormWidgetClass, dlg, NULL);
+    Widget tl = XtVaCreateManagedWidget("Widget:", xmLabelWidgetClass, form,
+        XmNtopAttachment, XmATTACH_FORM, XmNtopOffset, 10,
+        XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 8, NULL);
+    static char *type_opts[] = {"ws","title","clock","load","mem","disk","bat","vol","cpu","net","temp"};
+    int cur_type = (edit_idx >= 0 && edit_idx < num_bar_widgets)
+                       ? bar_layout[edit_idx].type : 1;
+    ld->type_om = make_option_menu(form, "ltype", type_opts, 11, cur_type);
+    XtVaSetValues(ld->type_om,
+        XmNtopAttachment, XmATTACH_FORM, XmNtopOffset, 10,
+        XmNleftAttachment, XmATTACH_WIDGET, XmNleftWidget, tl,
+        XmNrightAttachment, XmATTACH_FORM, NULL);
+
+    Widget al = XtVaCreateManagedWidget("Align:", xmLabelWidgetClass, form,
+        XmNtopAttachment, XmATTACH_WIDGET, XmNtopWidget, tl, XmNtopOffset, 10,
+        XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 8, NULL);
+    static char *align_opts[] = {"left","right"};
+    int cur_align = (edit_idx >= 0 && edit_idx < num_bar_widgets)
+                        ? bar_layout[edit_idx].align : 0;
+    ld->align_om = make_option_menu(form, "lalign", align_opts, 2, cur_align);
+    XtVaSetValues(ld->align_om,
+        XmNtopAttachment, XmATTACH_WIDGET, XmNtopWidget, tl, XmNtopOffset, 10,
+        XmNleftAttachment, XmATTACH_WIDGET, XmNleftWidget, al,
+        XmNrightAttachment, XmATTACH_FORM, NULL);
+    XtManageChild(form);
+
+    XtAddCallback(dlg, XmNokCallback, layout_dlg_cb, (XtPointer)ld);
+    XtAddCallback(dlg, XmNcancelCallback, layout_dlg_cb, (XtPointer)ld);
+    Widget help = XtNameToWidget(dlg, "Help");
+    if (help) XtUnmanageChild(help);
+    XtManageChild(dlg);
+}
+
+static void layout_add_cb(Widget w, XtPointer cd, XtPointer cbs) {
+    (void)w; (void)cd; (void)cbs;
+    layout_add_edit_dlg(-1);
+}
+
+static void layout_edit_cb(Widget w, XtPointer cd, XtPointer cbs) {
+    (void)w; (void)cd; (void)cbs;
+    int *sel = NULL, nsel = 0;
+    if (!XmListGetSelectedPos(w_layout_list, &sel, &nsel) || nsel < 1) return;
+    int idx = sel[0] - 1;
+    XtFree((char *)sel);
+    if (idx < 0 || idx >= num_bar_widgets) return;
+    layout_add_edit_dlg(idx);
+}
+
+static void layout_remove_cb(Widget w, XtPointer cd, XtPointer cbs) {
+    (void)w; (void)cd; (void)cbs;
+    int *sel = NULL, nsel = 0;
+    if (getenv("MGRDEBUG")) {
+        int *pos = NULL, np = 0, cnt = 0;
+        XtVaGetValues(w_layout_list, XmNitemCount, &cnt, NULL);
+        fprintf(stderr, "remove: items=%d\n", cnt);
+    }
+    if (!XmListGetSelectedPos(w_layout_list, &sel, &nsel) || nsel < 1) return;
+    int idx = sel[0] - 1;
+    XtFree((char *)sel);
+    if (idx < 0 || idx >= num_bar_widgets) return;
+    for (int i = idx; i < num_bar_widgets - 1; i++)
+        bar_layout[i] = bar_layout[i + 1];
+    num_bar_widgets--;
+    refresh_layout_list();
+}
+
+static void layout_move_cb(Widget w, XtPointer cd, XtPointer cbs) {
+    (void)w; (void)cbs;
+    int dir = (cd != NULL) ? 1 : -1;   /* +1 down, -1 up */
+    int *sel = NULL, nsel = 0;
+    if (!XmListGetSelectedPos(w_layout_list, &sel, &nsel) || nsel < 1) return;
+    int idx = sel[0] - 1;
+    XtFree((char *)sel);
+    int j = idx + dir;
+    if (idx < 0 || idx >= num_bar_widgets || j < 0 || j >= num_bar_widgets) return;
+    BarWidgetEntry tmp = bar_layout[idx];
+    bar_layout[idx] = bar_layout[j];
+    bar_layout[j] = tmp;
+    refresh_layout_list();
+    /* keep the moved item selected */
+    XmString it = XmStringCreateLocalized("");
+    XmListSelectPos(w_layout_list, j + 1, False);
+    XmStringFree(it);
+}
+
 /* keybindings panel */
 static Widget w_bind_list;       /* XmList showing current bindings */
 
@@ -1551,6 +1694,48 @@ static void create_bar_panel(Widget parent) {
             XmNleftAttachment, XmATTACH_WIDGET, XmNleftWidget, lbl,
             XmNrightAttachment, XmATTACH_FORM, NULL);
     }
+
+    /* ── bar layout editor ── */
+    {
+        Widget frame = XtVaCreateManagedWidget("layf", xmFormWidgetClass, rc,
+            XmNborderWidth, 1,
+            XmNheight, 190,
+            NULL);
+        Widget lbl = XtVaCreateManagedWidget("Bar Layout", xmLabelWidgetClass, frame,
+            XmNtopAttachment, XmATTACH_FORM, XmNtopOffset, 4,
+            XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 4, NULL);
+        /* list on the left */
+        w_layout_list = XmCreateScrolledList(frame, "layout_list", NULL, 0);
+        XtVaSetValues(XtParent(w_layout_list),
+            XmNtopAttachment, XmATTACH_WIDGET, XmNtopWidget, lbl, XmNtopOffset, 4,
+            XmNbottomAttachment, XmATTACH_FORM, XmNbottomOffset, 4,
+            XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 4,
+            XmNrightAttachment, XmATTACH_POSITION, XmNrightPosition, 60,
+            XmNheight, 140,
+            XmNvisibleItemCount, 8,
+            XmNselectionPolicy, XmSINGLE_SELECT,
+            NULL);
+        XtManageChild(w_layout_list);
+        /* buttons on the right */
+        Widget brc = XtVaCreateManagedWidget("lbrc", xmRowColumnWidgetClass, frame,
+            XmNorientation, XmVERTICAL, XmNpacking, XmPACK_TIGHT,
+            XmNtopAttachment, XmATTACH_WIDGET, XmNtopWidget, lbl, XmNtopOffset, 4,
+            XmNleftAttachment, XmATTACH_WIDGET, XmNleftWidget, XtParent(w_layout_list),
+            XmNleftOffset, 6,
+            XmNrightAttachment, XmATTACH_FORM, XmNrightOffset, 4, NULL);
+        Widget b_add = XtVaCreateManagedWidget("Add", xmPushButtonWidgetClass, brc, NULL);
+        Widget b_edit = XtVaCreateManagedWidget("Edit", xmPushButtonWidgetClass, brc, NULL);
+        Widget b_del = XtVaCreateManagedWidget("Remove", xmPushButtonWidgetClass, brc, NULL);
+        Widget b_up = XtVaCreateManagedWidget("Move Up", xmPushButtonWidgetClass, brc, NULL);
+        Widget b_dn = XtVaCreateManagedWidget("Move Down", xmPushButtonWidgetClass, brc, NULL);
+        XtAddCallback(b_add, XmNactivateCallback, layout_add_cb, NULL);
+        XtAddCallback(b_edit, XmNactivateCallback, layout_edit_cb, NULL);
+        XtAddCallback(b_del, XmNactivateCallback, layout_remove_cb, NULL);
+        XtAddCallback(b_up, XmNactivateCallback, layout_move_cb, NULL);
+        XtAddCallback(b_dn, XmNactivateCallback, layout_move_cb, (XtPointer)1);
+        refresh_layout_list();
+    }
+
     make_scale(rc, &w_num_workspaces, "Workspaces", 1, 20, cfg.num_workspaces);
     make_scale(rc, &w_master_ratio, "Master Ratio %", 10, 90, (int)(cfg.master_ratio*100));
 }
@@ -1964,6 +2149,7 @@ static void bind_ok_cb(Widget w, XtPointer cd, XtPointer cbs) {
             binds[num_binds++] = b;
     }
     refresh_bind_list();
+    refresh_layout_list();
     free(d);
 }
 
@@ -2085,6 +2271,7 @@ static void bind_remove_cb(Widget w, XtPointer cd, XtPointer cbs) {
         binds[i] = binds[i + 1];
     num_binds--;
     refresh_bind_list();
+    refresh_layout_list();
 }
 
 static void create_keybindings_panel(Widget parent) {
@@ -2121,6 +2308,7 @@ static void create_keybindings_panel(Widget parent) {
     XtManageChild(w_bind_list);
 
     refresh_bind_list();
+    refresh_layout_list();
 }
 
 static int scale_val(Widget w) { int v=0; XtVaGetValues(w, XmNvalue, &v, NULL); return v; }
@@ -2444,7 +2632,7 @@ int main(int argc, char *argv[]) {
     toplevel = XtVaAppInitialize(&app, "RondoMgr",
         NULL, 0, &argc, argv, NULL,
         XmNtitle, "Rondo WM Configuration",
-        XmNwidth, 500, XmNheight, 600,
+        XmNwidth, 520, XmNheight, 900,
         NULL);
 
     main_form = XtVaCreateManagedWidget("main", xmFormWidgetClass, toplevel,
