@@ -43,19 +43,51 @@ static void icon_set_from_imlib(Client *c, Imlib_Image img) {
         return;
     }
 
-    /* copy the raw ARGB pixels out; draw_icon_scaled renders them via
-     * imlib_create_image_using_data (no X drawable round-trip, real alpha) */
-    unsigned int *src = (unsigned int *)imlib_image_get_data_for_reading_only();
-    unsigned int *copy = malloc((size_t)w * h * sizeof(unsigned int));
-    if (!copy) { imlib_free_image_and_decache(); return; }
-    memcpy(copy, src, (size_t)w * h * sizeof(unsigned int));
+    /* flatten alpha onto the entry background, then render to a 24-bit
+     * pixmap so draw_icon_scaled's proven imlib path (same as WM_HINTS
+     * icons) can grab and scale it.  32-bit pixmaps proved unreliable
+     * through the imlib/X upload round-trip. */
+    imlib_image_set_has_alpha(1);
+    {
+        Imlib_Image bg = imlib_clone_image();
+        if (!bg) { imlib_free_image_and_decache(); return; }
+        imlib_context_set_image(bg);
+        {
+            XColor xcol;
+            xcol.pixel = col_frame_bg.pixel;
+            XQueryColor(dpy, DefaultColormap(dpy, DefaultScreen(dpy)), &xcol);
+            imlib_context_set_color(xcol.red / 257, xcol.green / 257,
+                                    xcol.blue / 257, 255);
+        }
+        imlib_image_fill_rectangle(0, 0, w, h);
+        imlib_blend_image_onto_image(img, 1,
+                                     0, 0, w, h,     /* source icon */
+                                     0, 0, w, h);    /* onto bg */
+        imlib_context_set_image(img);
+        imlib_free_image_and_decache();
+        img = bg;
+        imlib_context_set_image(img);
+    }
+
+    Pixmap pm = XCreatePixmap(dpy, root, (unsigned)w, (unsigned)h, 24);
+    {
+        Visual *prev_vis = imlib_context_get_visual();
+        Colormap prev_cmap = imlib_context_get_colormap();
+        Drawable prev_draw = imlib_context_get_drawable();
+        imlib_context_set_visual(xvisual);
+        imlib_context_set_colormap(xcolormap);
+        imlib_context_set_drawable(pm);
+        imlib_render_image_on_drawable_at_size(0, 0, w, h);
+        imlib_context_set_visual(prev_vis);
+        imlib_context_set_colormap(prev_cmap);
+        imlib_context_set_drawable(prev_draw);
+    }
     imlib_free_image_and_decache();
 
     icon_pixels_free(c);
-    c->icon_argb = copy;
+    c->icon_pixmap = pm;
     c->icon_w = w;
     c->icon_h = h;
-    c->icon_pixmap = None;
     c->icon_mask = None;
     c->icon_ours = 1;
 }
@@ -106,13 +138,23 @@ void icon_load_netwm(Client *c) {
     }
     unsigned long w = vals[best_off], h = vals[best_off + 1];
 
-    /* _NET_WM_ICON pixels are plain ARGB32 (host byte order); imlib uses
-     * the same packing for DATA32 */
-    Imlib_Image img = imlib_create_image_using_copied_data(
-        (int)w, (int)h, (uint32_t *)(vals + best_off + 2));
+    /* Xlib format-32 property data are LONGs (8 bytes per value on LP64);
+     * imlib needs packed 32-bit ARGB — compact first, or every other u32
+     * slot is garbage (the upper half of each long). */
+    unsigned long npix = w * h;
+    uint32_t *pixels = malloc((size_t)npix * sizeof(uint32_t));
+    if (!pixels) { XFree(data); return; }
+    for (unsigned long i = 0; i < npix; i++)
+        pixels[i] = (uint32_t)vals[best_off + 2 + i];
     XFree(data);
-    if (img)
-        icon_set_from_imlib(c, img);
+
+    Imlib_Image img = imlib_create_image_using_copied_data(
+        (int)w, (int)h, pixels);
+    if (!img) { free(pixels); return; }
+    /* using_copied_data copies into the image — our compacted buffer can
+     * go right away; icon_set_from_imlib consumes the image */
+    free(pixels);
+    icon_set_from_imlib(c, img);
 }
 
 /* ── 3. WM_CLASS → .desktop → icon theme ────────────────────────────── */
@@ -295,11 +337,6 @@ void icon_load_default(Client *c) {
 }
 
 /* ── entry point: fill c->icon_* if WM_HINTS didn't provide one ──────── */
-
-static int icon_have(Client *c) {
-    return (c->icon_pixmap != None || c->icon_argb != NULL) &&
-           c->icon_w > 0 && c->icon_h > 0;
-}
 
 void icon_acquire(Client *c) {
     /* WM_HINTS icon already present? (app-owned pixmap, w/h known) */

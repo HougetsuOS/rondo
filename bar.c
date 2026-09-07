@@ -998,6 +998,10 @@ static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw,
 
     if (c->icon_scaled_pm == None) {
         Imlib_Image img = None;
+        if (getenv("ICONDEBUG"))
+            fprintf(stderr, "scaled build: pm=%lu argb=%p mask=%lu\n",
+                    (unsigned long)c->icon_pixmap, (void*)c->icon_argb,
+                    (unsigned long)c->icon_mask);
         if (c->icon_argb) {
             /* acquired icon: raw ARGB32 pixels (with alpha).  Scale
              * client-side and upload directly — no imlib drawable
@@ -1010,8 +1014,23 @@ static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw,
                 int syy = sy * c->icon_h / sh;
                 const unsigned int *srow = c->icon_argb + (size_t)syy * c->icon_w;
                 unsigned int *drow = scaled + (size_t)sy * sw;
-                for (int sx = 0; sx < sw; sx++)
-                    drow[sx] = srow[sx * c->icon_w / sw];
+                for (int sx = 0; sx < sw; sx++) {
+                    /* _NET_WM_ICON pixels are straight (non-premultiplied)
+                       ARGB; the compositor expects premultiplied — multiply
+                       RGB by alpha so transparent areas don't bleed color */
+                    unsigned int px = srow[sx * c->icon_w / sw];
+                    unsigned int a = (px >> 24) & 0xFF;
+                    if (a == 0xFF)
+                        drow[sx] = px;
+                    else if (a == 0)
+                        drow[sx] = 0;
+                    else {
+                        unsigned int r = ((px >> 16) & 0xFF) * a / 255;
+                        unsigned int g = ((px >> 8) & 0xFF) * a / 255;
+                        unsigned int b = (px & 0xFF) * a / 255;
+                        drow[sx] = (a << 24) | (r << 16) | (g << 8) | b;
+                    }
+                }
             }
             Pixmap tmp = XCreatePixmap(dpy, target, (unsigned)sw, (unsigned)sh, 32);
             XmPlatDrawCtx cctx = _XmPlatCtx(dpy, tmp, argb_gc);
@@ -1020,12 +1039,35 @@ static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw,
             if (im) {
                 char *base = _XmPlatImageData(im);
                 int bpl = _XmPlatImageBytesPerLine(im);
+                if (getenv("ICONDEBUG"))
+                    fprintf(stderr, "upload: sw=%d sh=%d bpl=%d\n", sw, sh, bpl);
                 for (int sy = 0; sy < sh; sy++)
                     memcpy(base + (size_t)sy * bpl,
                            (const char *)(scaled + (size_t)sy * sw),
                            (size_t)sw * sizeof(unsigned int));
                 _XmPlatPutImage(cctx, im, 0, 0, 0, 0, (unsigned)sw, (unsigned)sh);
                 _XmPlatImageFree(im);
+                if (getenv("ICONDEBUG")) {
+                    /* verify what the server got: read the pixmap back */
+                    XmPlatImage rd = _XmPlatImageFromSurface2(dpy, tmp, 0, 0,
+                                                              (unsigned)sw, (unsigned)sh);
+                    if (rd) {
+                        unsigned int *px = (unsigned int *)(void *)_XmPlatImageData(rd);
+                        int bpl = _XmPlatImageBytesPerLine(rd) / 4;
+                        fprintf(stderr, "readback row0: %08x %08x %08x %08x %08x %08x\n",
+                                px[0], px[8], px[16], px[24], px[32], px[40]);
+                        fprintf(stderr, "readback row24: %08x %08x %08x %08x %08x %08x\n",
+                                px[24 * bpl], px[24 * bpl + 8], px[24 * bpl + 16],
+                                px[24 * bpl + 24], px[24 * bpl + 32], px[24 * bpl + 40]);
+                        _XmPlatImageFree(rd);
+                    }
+                    fprintf(stderr, "scaled row0:   %08x %08x %08x %08x %08x %08x\n",
+                            scaled[0], scaled[8], scaled[16], scaled[24],
+                            scaled[32], scaled[40]);
+                    fprintf(stderr, "scaled row24:  %08x %08x %08x %08x %08x %08x\n",
+                            scaled[24 * sw], scaled[24 * sw + 8], scaled[24 * sw + 16],
+                            scaled[24 * sw + 24], scaled[24 * sw + 32], scaled[24 * sw + 40]);
+                }
             }
             _XmPlatCtxFree(cctx);
             free(scaled);
