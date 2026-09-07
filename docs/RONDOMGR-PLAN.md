@@ -1,6 +1,6 @@
 # rondomgr Improvement Plan
 
-Status: P1 complete (round-trip data loss fixed), P2–P3 pending
+Status: P1 + P2 complete; P3.2 complete; P3.1/P3.3 pending
 Created: 2026-09-07
 
 Audit findings from driving rondomgr under Xvfb and diffing `~/.rondorc`
@@ -33,7 +33,7 @@ before/after an "Apply & Reload".
 
 ## P2 — Feedback & correctness
 
-### 2.1 Validation on Apply ✅
+### 2.1 Validation on Apply ✅ (committed e0825c4)
 - Validate hex colors (`#RGB/#RRGGBB/#RRGGBBAA` or X color names —
   `XParseColor` probe), numeric ranges, non-empty font/terminal strings.
 - On failure: Motif warning dialog listing the problems; do not write.
@@ -44,7 +44,7 @@ before/after an "Apply & Reload".
 - rondo side: `reloadconfig` replies with ok/error over the IPC socket;
   rondomgr surfaces the message (e.g. parse errors with line numbers).
 
-### 2.3 IPC extensions ✅
+### 2.3 IPC extensions ✅ (committed f21d707)
 - rondo IPC gains: `restart` (hand over like SIGTERM path), `reload-deep`
   (colors/fonts/patterns, not just numbers). rondo's `reload` now replies
   `OK` / `ERR <message>`.
@@ -56,7 +56,7 @@ before/after an "Apply & Reload".
   rows with add/remove/up/down controls, options = ws, title, clock, load,
   mem, disk, bat, vol, cpu, net, temp, tray.
 
-### 3.2 Color picker ✅
+### 3.2 Color picker ✅ (committed a712ee0)
 - Swatch button next to each color row opens a small Motif color dialog:
   hex entry (validated live), list of common X color names, OK/Cancel.
   Preview swatch updates live on valid hex.
