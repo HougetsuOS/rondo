@@ -1,6 +1,6 @@
 # rondomgr Improvement Plan
 
-Status: P1 + P2 + P3 complete; P4 optional polish pending
+Status: P1–P3 complete; P4 optional polish pending
 Created: 2026-09-07
 
 Audit findings from driving rondomgr under Xvfb and diffing `~/.rondorc`
@@ -61,7 +61,7 @@ before/after an "Apply & Reload".
   hex entry (validated live), list of common X color names, OK/Cancel.
   Preview swatch updates live on valid hex.
 
-### 3.3 Background extras ✅
+### 3.3 Background extras ✅ (this commit)
 - `bg_pattern_size` scale (rondo supports it; GUI missed it).
 - Root background preview widget (checkerboard/diagonal/… pattern + colors).
 

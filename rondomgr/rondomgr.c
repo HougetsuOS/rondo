@@ -1095,6 +1095,7 @@ static Widget w_bar_position, w_iconbar_position, w_icon_mode, w_icon_style;
 static Widget w_fade_enabled, w_fade_in_ms, w_fade_out_ms, w_tooltip_delay;
 static Widget w_font, w_terminal, w_launcher, w_modkey, w_clock_format, w_tooltip_font;
 static Widget w_bg_mode, w_bg_pattern, w_bg_color, w_bg_color2, w_bg_image_path, w_bg_image_mode;
+static Widget w_bg_pattern_size, w_bg_preview;
 /* color widgets */
 typedef struct { Widget text; Widget preview; const char *key; char *value; } ColorWidget;
 static ColorWidget color_widgets[30];
@@ -2024,6 +2025,97 @@ static void create_compositing_panel(Widget parent) {
     make_scale(rc, &w_tooltip_delay, "Tooltip Delay (ms)", 0, 10000, cfg.tooltip_delay);
 }
 
+/* ── Background preview ─────────────────────────────────────────────── */
+
+#include <Xm/DrawingA.h>
+static int scale_val(Widget w);
+
+static unsigned long bgprev_pixel(Display *d, Colormap cm, const char *spec) {
+    XColor c;
+    if (XParseColor(d, cm, spec, &c) && XAllocColor(d, cm, &c))
+        return c.pixel;
+    return BlackPixel(d, DefaultScreen(d));
+}
+
+static void bg_preview_draw(Widget w) {
+    Display *d = XtDisplay(w);
+    Window win = XtWindow(w);
+    if (!win) return;
+    int W = 0, H = 0;
+    XtVaGetValues(w, XmNwidth, &W, XmNheight, &H, NULL);
+    Colormap cm = DefaultColormap(d, DefaultScreen(d));
+    unsigned long c1 = bgprev_pixel(d, cm, XmTextGetString(w_bg_color));
+    unsigned long c2 = bgprev_pixel(d, cm, XmTextGetString(w_bg_color2));
+
+    XGCValues gv;
+    gv.foreground = c1;
+    GC gc = XCreateGC(d, win, GCForeground, &gv);
+    XFillRectangle(d, win, gc, 0, 0, (unsigned)W, (unsigned)H);
+
+    int mode = option_menu_index(w_bg_mode);
+    if (mode == 1) {   /* Pattern */
+        int pat = option_menu_index(w_bg_pattern);
+        int cell = scale_val(w_bg_pattern_size);
+        if (cell <= 0) cell = 16;
+        gv.foreground = c2;
+        XChangeGC(d, gc, GCForeground, &gv);
+        switch (pat) {
+        case 0:  /* checkerboard */
+            for (int y = 0; y < H; y += cell)
+                for (int x = 0; x < W; x += cell)
+                    if (((x / cell) + (y / cell)) & 1)
+                        XFillRectangle(d, win, gc, x, y,
+                                       (unsigned)cell, (unsigned)cell);
+            break;
+        case 1:  /* diagonal stripes */
+            for (int i = -H; i < W; i += cell * 2)
+                for (int k = 0; k < cell / 2 + 1; k++)
+                    XDrawLine(d, win, gc, i + k, 0, i + k + H, H);
+            break;
+        case 2:  /* horizontal stripes */
+            for (int y = 0; y < H; y += cell)
+                XFillRectangle(d, win, gc, 0, y, (unsigned)W, (unsigned)(cell / 2 + 1));
+            break;
+        case 3:  /* vertical stripes */
+            for (int x = 0; x < W; x += cell)
+                XFillRectangle(d, win, gc, x, 0, (unsigned)(cell / 2 + 1), (unsigned)H);
+            break;
+        case 4:  /* dots */
+            for (int y = cell / 2; y < H; y += cell)
+                for (int x = cell / 2; x < W; x += cell)
+                    XFillArc(d, win, gc, x - cell / 6, y - cell / 6,
+                             (unsigned)(cell / 3), (unsigned)(cell / 3), 0, 360 * 64);
+            break;
+        case 5:  /* crosshatch */
+            for (int i = -H; i < W; i += cell) {
+                XDrawLine(d, win, gc, i, 0, i + H, H);
+                XDrawLine(d, win, gc, i + H, 0, i, H);
+            }
+            break;
+        case 6:  /* weave */
+            for (int y = 0; y < H; y += cell)
+                for (int x = 0; x < W; x += cell)
+                    if (((x / cell) + (y / cell)) & 1) {
+                        XDrawLine(d, win, gc, x, y, x + cell, y + cell);
+                        XDrawLine(d, win, gc, x + cell, y, x, y + cell);
+                    }
+            break;
+        }
+    }
+    XFreeGC(d, gc);
+}
+
+static void bg_preview_expose_cb(Widget w, XtPointer cd, XtPointer cbs) {
+    (void)cd; (void)cbs;
+    bg_preview_draw(w);
+}
+
+static void bg_preview_redraw_cb(Widget w, XtPointer cd, XtPointer cbs) {
+    (void)w; (void)cd; (void)cbs;
+    if (w_bg_preview && XtWindow(w_bg_preview))
+        bg_preview_draw(w_bg_preview);
+}
+
 static void create_background_panel(Widget parent) {
     Widget rc;
     make_scroll_form(parent, "Background", &rc);
@@ -2053,6 +2145,23 @@ static void create_background_panel(Widget parent) {
     }
     make_text_row(rc, &w_bg_color, "Color 1", cfg.bg_color);
     make_text_row(rc, &w_bg_color2, "Color 2", cfg.bg_color2);
+    /* pattern cell size (0 = default) */
+    make_scale(rc, &w_bg_pattern_size, "Cell Size", 0, 100,
+               cfg.bg_pattern_size > 0 ? cfg.bg_pattern_size : 0);
+    /* live pattern preview */
+    {
+        Widget prev = XtVaCreateManagedWidget("bgprev", xmDrawingAreaWidgetClass, rc,
+            XmNwidth, 300, XmNheight, 100,
+            XmNbackground, color_pixel(cfg.bg_color), NULL);
+        w_bg_preview = prev;
+        XtAddCallback(prev, XmNexposeCallback, bg_preview_expose_cb, NULL);
+        /* redraw when any of the inputs change */
+        XtAddCallback(w_bg_pattern, XmNvalueChangedCallback, bg_preview_redraw_cb, NULL);
+        XtAddCallback(w_bg_pattern_size, XmNvalueChangedCallback, bg_preview_redraw_cb, NULL);
+        XtAddCallback(w_bg_color, XmNvalueChangedCallback, bg_preview_redraw_cb, NULL);
+        XtAddCallback(w_bg_color2, XmNvalueChangedCallback, bg_preview_redraw_cb, NULL);
+        XtAddCallback(bg_om, XmNvalueChangedCallback, bg_preview_redraw_cb, NULL);
+    }
     {
         Widget row = XtVaCreateManagedWidget("row", xmFormWidgetClass, rc,
             XmNfractionBase, 100, NULL);
@@ -2341,6 +2450,8 @@ static void push_cfg_to_widgets(void) {
     XtVaSetValues(w_fade_in_ms, XmNvalue, cfg.fade_in_ms, NULL);
     XtVaSetValues(w_fade_out_ms, XmNvalue, cfg.fade_out_ms, NULL);
     XtVaSetValues(w_tooltip_delay, XmNvalue, cfg.tooltip_delay, NULL);
+    XtVaSetValues(w_bg_pattern_size, XmNvalue,
+                  cfg.bg_pattern_size > 0 ? cfg.bg_pattern_size : 0, NULL);
     /* toggles */
     XmToggleButtonSetState(w_show_bar, cfg.show_bar, True);
     XmToggleButtonSetState(w_fade_enabled, cfg.fade_enabled, True);
@@ -2410,6 +2521,7 @@ static void read_gui_state(void) {
     { char *s = XmTextGetString(w_modkey); strncpy(cfg.modkey,s,sizeof(cfg.modkey)-1); cfg.modkey[sizeof(cfg.modkey)-1]='\0'; XtFree(s); }
     { char *s = XmTextGetString(w_clock_format); strncpy(cfg.clock_format,s,sizeof(cfg.clock_format)-1); cfg.clock_format[sizeof(cfg.clock_format)-1]='\0'; XtFree(s); }
     { char *s = XmTextGetString(w_tooltip_font); strncpy(cfg.tooltip_font,s,sizeof(cfg.tooltip_font)-1); cfg.tooltip_font[sizeof(cfg.tooltip_font)-1]='\0'; XtFree(s); }
+    cfg.bg_pattern_size = scale_val(w_bg_pattern_size);
     { char *s = XmTextGetString(w_bg_color); strncpy(cfg.bg_color,s,sizeof(cfg.bg_color)-1); cfg.bg_color[sizeof(cfg.bg_color)-1]='\0'; XtFree(s); }
     { char *s = XmTextGetString(w_bg_color2); strncpy(cfg.bg_color2,s,sizeof(cfg.bg_color2)-1); cfg.bg_color2[sizeof(cfg.bg_color2)-1]='\0'; XtFree(s); }
     { char *s = XmTextGetString(w_bg_image_path); strncpy(cfg.bg_image_path,s,sizeof(cfg.bg_image_path)-1); cfg.bg_image_path[sizeof(cfg.bg_image_path)-1]='\0'; XtFree(s); }
