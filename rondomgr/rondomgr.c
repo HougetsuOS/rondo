@@ -164,6 +164,7 @@ static int num_bar_widgets = 0;
 typedef struct { char mod[64]; char key[64]; char action[64]; char arg[128]; } BindEntry;
 static BindEntry binds[128];
 static int num_binds = 0;
+static int def_binds_count = 0;   /* defaults written by set_defaults() */
 
 static void set_defaults(void) {
     cfg.frame_width = 6; cfg.title_height = 18; cfg.bar_height = 26;
@@ -256,6 +257,7 @@ static void set_defaults(void) {
         {"Alt+Shift","o","togglecompositing",""},
     };
     num_binds = (int)(sizeof(def_binds)/sizeof(def_binds[0]));
+    def_binds_count = num_binds;
     for (int i = 0; i < num_binds; i++) {
         strncpy(binds[i].mod, def_binds[i].mod, sizeof(binds[i].mod)-1);
         strncpy(binds[i].key, def_binds[i].key, sizeof(binds[i].key)-1);
@@ -744,8 +746,14 @@ static void load_config(void) {
                 cfg_skip();
             }
         }
-        /* compound: bind */
+        /* compound: bind — file bindings REPLACE the defaults set above */
         else if (strcmp(key,"bind")==0) {
+            if (num_binds == def_binds_count) {
+                /* first file bind: drop the defaults so parsed binds
+                   replace (not append to) them — prevents the list from
+                   doubling on every load+save cycle */
+                num_binds = 0;
+            }
             if (num_binds < 128) {
                 BindEntry *b = &binds[num_binds++];
                 b->mod[0]=b->key[0]=b->action[0]=b->arg[0]='\0';
