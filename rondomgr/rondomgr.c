@@ -1100,6 +1100,144 @@ typedef struct { Widget text; Widget preview; const char *key; char *value; } Co
 static ColorWidget color_widgets[30];
 static int num_color_widgets = 0;
 
+static Pixel color_pixel(const char *name);
+static void color_swatch_event(Widget w, XtPointer client_data,
+                               XEvent *event, Boolean *cont);
+
+/* live preview: re-parse the field on every keystroke; invalid text keeps
+ * the last good color but greys the swatch border */
+static void color_text_changed(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)call_data;
+    ColorWidget *cw = (ColorWidget *)client_data;
+    char *s = XmTextGetString(w);
+    Pixel px = color_pixel(s);
+    unsigned long border = BlackPixelOfScreen(XtScreen(w));
+    if (!(s[0] == '#' && strlen(s) > 1)) border = 0;  /* named colors: solid border */
+    XtVaSetValues(cw->preview, XmNbackground, px,
+                  XmNborderColor, px == WhitePixel(XtDisplay(w), DefaultScreen(XtDisplay(w)))
+                                  ? border : BlackPixelOfScreen(XtScreen(w)),
+                  NULL);
+    XtFree(s);
+}
+
+/* ── color picker dialog ─────────────────────────────────────────────── */
+typedef struct {
+    Widget swatch;
+    Widget hex_text;
+    char *value;       /* into cfg */
+    Widget preview;    /* row text field to refresh on OK */
+    Widget row_swatch; /* row color swatch to recolor on OK */
+    char key[64];
+} PickerData;
+
+static const char *picker_names[] = {
+    "black", "white", "red", "green", "blue", "yellow", "magenta", "cyan",
+    "gray", "darkgray", "orange", "purple", "brown", "pink",
+    "#5F9EA0",  /* cadetblue   */
+    "#2F4F4F",  /* darkslategray */
+    "#A8A8A8",  /* motif gray  */
+    "#D4D4D4",  /* menu gray   */
+    NULL
+};
+
+static void picker_swatch_redraw(Widget sw, const char *hex) {
+    XtVaSetValues(sw, XmNbackground, color_pixel(hex), NULL);
+}
+
+/* list selection: copy the chosen color name/hex into the field and
+ * redraw the swatch */
+static void picker_name_cb(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w;
+    PickerData *pd = (PickerData *)client_data;
+    XmListCallbackStruct *cbs = (XmListCallbackStruct *)call_data;
+    if (!cbs) return;
+    char *s = NULL;
+    if (!XmStringGetLtoR(cbs->item, XmFONTLIST_DEFAULT_TAG, &s)) return;
+    if (s && s[0]) {
+        XmTextSetString(pd->hex_text, s);
+        picker_swatch_redraw(pd->swatch, s);
+    }
+    XtFree(s);
+}
+
+static void picker_ok_cb(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)call_data;
+    PickerData *pd = (PickerData *)client_data;
+    char *s = XmTextGetString(pd->hex_text);
+    if (s && s[0]) {
+        /* accept only valid colors */
+        Display *d = XtDisplay(pd->swatch);
+        XColor c;
+        if (XParseColor(d, DefaultColormap(d, DefaultScreen(d)), s, &c) ||
+            (s[0] == '#' && strlen(s) == 9)) {
+            COPY_TRUNK(pd->value, s);
+            XmTextSetString(pd->preview, s);
+            XtVaSetValues(pd->row_swatch, XmNbackground, color_pixel(s), NULL);
+        }
+    }
+    XtFree(s);
+    /* callbacks receive the SelectionBox; its parent is the dialog shell */
+    XtDestroyWidget(XtParent(w));
+    free(pd);
+}
+
+static void picker_cancel_cb(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)client_data; (void)call_data;
+    XtDestroyWidget(XtParent(w));
+}
+
+static void color_swatch_cb(Widget w, XtPointer client_data, XtPointer call_data) {
+    (void)w; (void)call_data;
+    ColorWidget *cw = (ColorWidget *)client_data;
+
+    Widget dlg = XmCreatePromptDialog(toplevel, "colorPicker", NULL, 0);
+    XtUnmanageChild(XmSelectionBoxGetChild(dlg, XmDIALOG_TEXT));
+    XtUnmanageChild(XmSelectionBoxGetChild(dlg, XmDIALOG_SELECTION_LABEL));
+    /* repurpose: build our own content */
+    PickerData *pd = calloc(1, sizeof(PickerData));
+    pd->value = cw->value;
+    pd->preview = cw->text;
+    pd->row_swatch = cw->preview;
+
+    Widget form = XtVaCreateWidget("pform", xmFormWidgetClass, dlg, NULL);
+    Widget lbl = XtVaCreateManagedWidget("Color:", xmLabelWidgetClass, form,
+        XmNtopAttachment, XmATTACH_FORM, XmNleftAttachment, XmATTACH_FORM,
+        XmNleftOffset, 8, XmNtopOffset, 8, NULL);
+    pd->hex_text = XtVaCreateManagedWidget("hex", xmTextWidgetClass, form,
+        XmNtopAttachment, XmATTACH_FORM, XmNtopOffset, 8,
+        XmNleftAttachment, XmATTACH_WIDGET, XmNleftWidget, lbl,
+        XmNrightAttachment, XmATTACH_FORM, XmNrightOffset, 8,
+        XmNeditMode, XmSINGLE_LINE_EDIT, XmNvalue, cw->value, NULL);
+    pd->swatch = XtVaCreateManagedWidget("sw", xmFrameWidgetClass, form,
+        XmNtopAttachment, XmATTACH_WIDGET, XmNtopWidget, lbl, XmNtopOffset, 10,
+        XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 8,
+        XmNrightAttachment, XmATTACH_FORM, XmNrightOffset, 8,
+        XmNheight, 40, XmNbackground, color_pixel(cw->value), NULL);
+    Widget list = XmCreateScrolledList(form, "names", NULL, 0);
+    XtVaSetValues(XtParent(list),
+        XmNtopAttachment, XmATTACH_WIDGET, XmNtopWidget, pd->swatch, XmNtopOffset, 10,
+        XmNbottomAttachment, XmATTACH_FORM, XmNbottomOffset, 8,
+        XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 8,
+        XmNrightAttachment, XmATTACH_FORM, XmNrightOffset, 8,
+        NULL);
+    for (int i = 0; picker_names[i]; i++) {
+        XmString it = XmStringCreateLocalized((char *)picker_names[i]);
+        XmListAddItem(list, it, i + 1);
+        XmStringFree(it);
+    }
+    XtAddCallback(list, XmNbrowseSelectionCallback, picker_name_cb, (XtPointer)pd);
+    XtManageChild(list);
+    XtManageChild(form);
+
+    XtAddCallback(dlg, XmNokCallback, picker_ok_cb, (XtPointer)pd);
+    XtAddCallback(dlg, XmNcancelCallback, picker_cancel_cb, (XtPointer)pd);
+    XtAddCallback(dlg, XmNhelpCallback, picker_cancel_cb, (XtPointer)pd);
+    XtUnmanageChild(XmSelectionBoxGetChild(dlg, XmDIALOG_APPLY_BUTTON));
+    Widget help = XtNameToWidget(dlg, "Help");
+    if (help) XtUnmanageChild(help);
+    XtManageChild(dlg);
+}
+
 /* keybindings panel */
 static Widget w_bind_list;       /* XmList showing current bindings */
 
@@ -1258,10 +1396,25 @@ static void add_color_widget(Widget parent, const char *label, const char *key, 
         XmNleftAttachment, XmATTACH_WIDGET, XmNleftWidget, text,
         XmNrightAttachment, XmATTACH_FORM, XmNrightOffset, 4,
         XmNwidth, 30, XmNheight, 20,
+        XmNborderWidth, 1,
         XmNbackground, color_pixel(value),
         NULL);
     ColorWidget *cw = &color_widgets[num_color_widgets++];
     cw->text = text; cw->preview = preview; cw->key = key; cw->value = value;
+    /* live preview on every edit; click the swatch for a picker */
+    XtAddCallback(text, XmNvalueChangedCallback, color_text_changed,
+                  (XtPointer)cw);
+    /* click on the swatch opens the picker (event handler on the Frame) */
+    XtAddEventHandler(preview, ButtonPressMask, False,
+                      color_swatch_event, (XtPointer)cw);
+}
+
+/* swatch click → picker (event handler; works on the Frame widget) */
+static void color_swatch_event(Widget w, XtPointer client_data,
+                               XEvent *event, Boolean *cont) {
+    (void)w; (void)cont;
+    if (event->type != ButtonPress) return;
+    color_swatch_cb(w, client_data, NULL);
 }
 
 /* panel creation helpers */
