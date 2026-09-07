@@ -1575,9 +1575,12 @@ static Widget make_scroll_form(Widget parent, const char *tab_label, Widget *rc_
     Widget sw = XmCreateScrolledWindow(parent, "panel_sw", sw_args, sw_n);
     XmStringFree(xms);
 
+    /* PACK_TIGHT: every child keeps its natural height.  The old
+       PACK_COLUMN equalized all cell sizes to the tallest child, so one
+       tall row (color picker, layout editor) inflated the whole panel. */
     Widget rc = XtVaCreateWidget("panel", xmRowColumnWidgetClass, sw,
-        XmNorientation, XmVERTICAL, XmNpacking, XmPACK_COLUMN,
-        XmNnumColumns, 1, XmNentryAlignment, XmALIGNMENT_BEGINNING,
+        XmNorientation, XmVERTICAL, XmNpacking, XmPACK_TIGHT,
+        XmNentryAlignment, XmALIGNMENT_BEGINNING,
         NULL);
     XmScrolledWindowSetAreas(sw, NULL, NULL, rc);
     XtManageChild(rc);
@@ -2116,6 +2119,12 @@ static void bg_preview_redraw_cb(Widget w, XtPointer cd, XtPointer cbs) {
         bg_preview_draw(w_bg_preview);
 }
 
+static void bg_preview_timer_cb(XtPointer cd, XtIntervalId *id) {
+    (void)id;
+    Widget w = (Widget)cd;
+    if (w && XtWindow(w)) bg_preview_draw(w);
+}
+
 static void create_background_panel(Widget parent) {
     Widget rc;
     make_scroll_form(parent, "Background", &rc);
@@ -2148,10 +2157,19 @@ static void create_background_panel(Widget parent) {
     /* pattern cell size (0 = default) */
     make_scale(rc, &w_bg_pattern_size, "Cell Size", 0, 100,
                cfg.bg_pattern_size > 0 ? cfg.bg_pattern_size : 0);
-    /* live pattern preview */
+    /* live pattern preview — inside a fixed-height Form so the
+       RowColumn's tight packing can't shrink it to a sliver */
     {
-        Widget prev = XtVaCreateManagedWidget("bgprev", xmDrawingAreaWidgetClass, rc,
+        Widget pform = XtVaCreateManagedWidget("bgpform", xmFormWidgetClass, rc,
             XmNwidth, 300, XmNheight, 100,
+            XmNborderWidth, 1,
+            XmNresizePolicy, XmRESIZE_NONE,
+            NULL);
+        Widget prev = XtVaCreateManagedWidget("bgprev", xmDrawingAreaWidgetClass, pform,
+            XmNtopAttachment, XmATTACH_FORM,
+            XmNbottomAttachment, XmATTACH_FORM,
+            XmNleftAttachment, XmATTACH_FORM,
+            XmNrightAttachment, XmATTACH_FORM,
             XmNbackground, color_pixel(cfg.bg_color), NULL);
         w_bg_preview = prev;
         XtAddCallback(prev, XmNexposeCallback, bg_preview_expose_cb, NULL);
@@ -2161,6 +2179,9 @@ static void create_background_panel(Widget parent) {
         XtAddCallback(w_bg_color, XmNvalueChangedCallback, bg_preview_redraw_cb, NULL);
         XtAddCallback(w_bg_color2, XmNvalueChangedCallback, bg_preview_redraw_cb, NULL);
         XtAddCallback(bg_om, XmNvalueChangedCallback, bg_preview_redraw_cb, NULL);
+        /* initial paint once the widget is realized and has final geometry */
+        XtAppAddTimeOut(XtWidgetToApplicationContext(prev), 0,
+                        bg_preview_timer_cb, (XtPointer)prev);
     }
     {
         Widget row = XtVaCreateManagedWidget("row", xmFormWidgetClass, rc,
