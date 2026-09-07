@@ -87,6 +87,7 @@ Atom net_wm_window_type_popup_menu;
 Atom net_wm_window_type_dropdown_menu;
 Atom net_wm_window_type_tooltip;
 Atom net_wm_window_type_notification;
+Atom net_wm_icon;
 Atom motif_wm_hints;
 Atom net_wm_window_opacity;
 Atom net_wm_cm_s0;
@@ -528,7 +529,7 @@ void setup(int *argc, char **argv) {
      * (_XmPlatInternAtomsRaw — the XInternAtoms replacement, see the
      * motif fork's MIGRATION_GUIDE §4.8) */
     {
-        unsigned long ids[37];
+        unsigned long ids[38];
         const char *names[] = {
             "WM_PROTOCOLS", "WM_DELETE_WINDOW", "WM_TAKE_FOCUS",
             "WM_STATE", "WM_CHANGE_STATE", "WM_NORMAL_HINTS",
@@ -546,6 +547,7 @@ void setup(int *argc, char **argv) {
             "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU",
             "_NET_WM_WINDOW_TYPE_TOOLTIP",
             "_NET_WM_WINDOW_TYPE_NOTIFICATION",
+            "_NET_WM_ICON",
             "_MOTIF_WM_HINTS", "_NET_WM_WINDOW_OPACITY",
             "_NET_WM_CM_S0",
             "_NET_SYSTEM_TRAY_S0", "_NET_SYSTEM_TRAY_VISUAL",
@@ -571,7 +573,7 @@ void setup(int *argc, char **argv) {
                 &net_wm_window_type_dropdown_menu,
                 &net_wm_window_type_tooltip,
                 &net_wm_window_type_notification,
-                &motif_wm_hints, &net_wm_window_opacity,
+                &net_wm_icon, &motif_wm_hints, &net_wm_window_opacity,
                 &net_wm_cm_s0,
                 &net_system_tray, &net_system_tray_visual,
                 &net_system_tray_opcode, &manager_atom, &xembed,

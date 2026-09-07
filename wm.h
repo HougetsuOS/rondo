@@ -103,6 +103,8 @@ struct Client {
     Pixmap icon_mask;     /* WM_HINTS icon mask (None if unavailable) */
     int icon_w, icon_h;   /* actual icon pixmap dimensions (0 if none) */
     Window icon_window;   /* WM_HINTS icon window (None if unavailable) */
+    int icon_ours;        /* icon_pixmap was allocated by icon.c (free it) */
+    unsigned int *icon_argb; /* raw ARGB32 pixels owned by us (icon.c) */
     /* cached scaled icon for the icon bar (rebuilt only when icon or
      * target size changes — avoids per-draw XGetImage/XPutImage work) */
     Pixmap icon_scaled_pm;
@@ -246,7 +248,13 @@ extern Atom net_wm_window_type_popup_menu;
 extern Atom net_wm_window_type_dropdown_menu;
 extern Atom net_wm_window_type_tooltip;
 extern Atom net_wm_window_type_notification;
+extern Atom net_wm_icon;
 extern Atom motif_wm_hints;
+
+/* icon.c */
+void icon_acquire(Client *c);
+void icon_load_netwm(Client *c);
+void icon_pixels_free(Client *c);
 extern Atom net_wm_window_opacity;
 extern Atom net_wm_cm_s0;
 

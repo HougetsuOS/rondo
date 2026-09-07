@@ -561,6 +561,10 @@ void manage(Window w, XWindowAttributes *wa) {
                      &_bw, &_depth);
     }
 
+    /* WM_HINTS gave nothing?  fall back: _NET_WM_ICON → desktop-file icon
+     * (via WM_CLASS) → built-in default icon */
+    icon_acquire(c);
+
     /* read client colormap */
     c->cmap = wa->colormap;
 
@@ -698,6 +702,7 @@ void unmanage(Client *c, int destroyed) {
     /* free cached scaled icon pixmaps */
     if (c->icon_scaled_pm)   XFreePixmap(dpy, c->icon_scaled_pm);
     if (c->icon_scaled_mask) XFreePixmap(dpy, c->icon_scaled_mask);
+    icon_pixels_free(c);
     /* cancel any in-progress fade */
     if (c->fade_timer) {
         XtRemoveTimeOut(c->fade_timer);

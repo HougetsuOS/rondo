@@ -969,7 +969,8 @@ static void icon_scaled_cache_clear(Client *c) {
  * The scaled result (and scaled mask) is cached per client — rebuilt only
  * when the icon or target size changes, instead of per icon-bar redraw. */
 static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw, int dh) {
-    if (!c || c->icon_pixmap == None || c->icon_w <= 0 || c->icon_h <= 0)
+    if (!c || c->icon_w <= 0 || c->icon_h <= 0 ||
+        (c->icon_pixmap == None && !c->icon_argb))
         return;
 
     /* Scale to fit within (dw, dh), preserving aspect ratio */
@@ -996,11 +997,50 @@ static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw,
     }
 
     if (c->icon_scaled_pm == None) {
-        imlib_context_set_drawable(c->icon_pixmap);
-        Imlib_Image img = imlib_create_image_from_drawable(0, 0, 0,
-                                                           c->icon_w, c->icon_h, 0);
-        if (!img)
-            return;
+        Imlib_Image img = None;
+        if (c->icon_argb) {
+            /* acquired icon: raw ARGB32 pixels (with alpha).  Scale
+             * client-side and upload directly — no imlib drawable
+             * round-trip (XGetImage on depth-32 pixmaps is unreliable),
+             * and the alpha survives into the 32-bit bar window where
+             * the compositor blends it. */
+            unsigned int *scaled = malloc((size_t)sw * sh * sizeof(unsigned int));
+            if (!scaled) return;
+            for (int sy = 0; sy < sh; sy++) {
+                int syy = sy * c->icon_h / sh;
+                const unsigned int *srow = c->icon_argb + (size_t)syy * c->icon_w;
+                unsigned int *drow = scaled + (size_t)sy * sw;
+                for (int sx = 0; sx < sw; sx++)
+                    drow[sx] = srow[sx * c->icon_w / sw];
+            }
+            Pixmap tmp = XCreatePixmap(dpy, target, (unsigned)sw, (unsigned)sh, 32);
+            XmPlatDrawCtx cctx = _XmPlatCtx(dpy, tmp, argb_gc);
+            XmPlatImage im = _XmPlatImageCreateOnVisual(cctx, argb_visual, 32,
+                                                        (unsigned)sw, (unsigned)sh);
+            if (im) {
+                char *base = _XmPlatImageData(im);
+                int bpl = _XmPlatImageBytesPerLine(im);
+                for (int sy = 0; sy < sh; sy++)
+                    memcpy(base + (size_t)sy * bpl,
+                           (const char *)(scaled + (size_t)sy * sw),
+                           (size_t)sw * sizeof(unsigned int));
+                _XmPlatPutImage(cctx, im, 0, 0, 0, 0, (unsigned)sw, (unsigned)sh);
+                _XmPlatImageFree(im);
+            }
+            _XmPlatCtxFree(cctx);
+            free(scaled);
+            c->icon_scaled_pm = tmp;
+            c->icon_scaled_mask = None;
+            c->icon_scaled_w = sw;
+            c->icon_scaled_h = sh;
+            goto blit_cached;
+        } else {
+            imlib_context_set_drawable(c->icon_pixmap);
+            img = imlib_create_image_from_drawable(0, 0, 0,
+                                                   c->icon_w, c->icon_h, 0);
+            if (!img)
+                return;
+        }
 
         if (c->icon_mask != None) {
             /* With mask: render onto a temp pixmap filled with the bar
@@ -1107,6 +1147,7 @@ static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw,
         }
     }
 
+blit_cached:
     /* blit the cached scaled icon to the target.
      * _XmPlatBlitMask is an XCopyPlane of the mask itself (it REPLACES the
      * destination with the mask) — NOT a masked copy of src.  The icon must

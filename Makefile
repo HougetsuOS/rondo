@@ -10,7 +10,7 @@ MOTIF_LIBS = $(shell pkg-config --libs motif-static 2>/dev/null || pkg-config --
 # libXm.a pulls in XShape (libXext) and other transitive deps
 MOTIF_STATIC_EXTRA = $(shell pkg-config --libs xext 2>/dev/null) -lXmu -lSM -lICE
 
-SRCS    = main.c frame.c bar.c feedback.c mouse.c client.c layout.c action.c event.c menu.c config.c bg.c ewmh.c compose.c ipc.c tray.c
+SRCS    = main.c frame.c bar.c feedback.c mouse.c client.c layout.c action.c event.c menu.c config.c bg.c ewmh.c compose.c ipc.c tray.c icon.c
 OBJS    = $(SRCS:.c=.o)
 BIN     = rondo
 

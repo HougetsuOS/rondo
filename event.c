@@ -487,6 +487,19 @@ void run(void) {
                                 }
                                 XFree(hints);
                             }
+                        } else if (ev.xproperty.atom == net_wm_icon) {
+                            /* app set/changed its EWMH icon — re-run
+                             * acquisition only if we're using OUR icon */
+                            if (c->icon_ours) {
+                                icon_load_netwm(c);
+                                if (c->icon_scaled_pm)   XFreePixmap(dpy, c->icon_scaled_pm);
+                                if (c->icon_scaled_mask) XFreePixmap(dpy, c->icon_scaled_mask);
+                                c->icon_scaled_pm = None;
+                                c->icon_scaled_mask = None;
+                                c->icon_scaled_w = 0;
+                                c->icon_scaled_h = 0;
+                                if (c->is_minimized) drawiconbar();
+                            }
                         } else if (ev.xproperty.atom == wm_normal_hints) {
                             read_size_hints(c);
                             /* GTK splash -> main-window transition: the app
