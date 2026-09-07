@@ -444,6 +444,57 @@ static void save_palette_file(const Palette *pal) {
 static char *cfg_buf;
 static int cfg_pos, cfg_len;
 
+/* Raw top-level forms rondomgr doesn't model (root-menu, unknown keys) plus
+ * file comments, captured on read and re-emitted on save so hand-written
+ * config content survives an Apply. */
+typedef struct { char *text; } PreservedForm;
+static PreservedForm *preserved;
+static int num_preserved;
+
+static void preserved_add_n(const char *s, size_t n) {
+    if (n == 0) return;
+    preserved = realloc(preserved, sizeof(PreservedForm) * (size_t)(num_preserved + 1));
+    if (!preserved) { num_preserved = 0; return; }
+    preserved[num_preserved].text = malloc(n + 1);
+    memcpy(preserved[num_preserved].text, s, n);
+    preserved[num_preserved].text[n] = '\0';
+    num_preserved++;
+}
+
+static void preserved_clear(void) {
+    for (int i = 0; i < num_preserved; i++) free(preserved[i].text);
+    free(preserved);
+    preserved = NULL;
+    num_preserved = 0;
+}
+
+/* top-level keys rondomgr models and regenerates on save — everything else
+ * is preserved verbatim */
+static int is_known_key(const char *key) {
+    static const char *known[] = {
+        "frame-width", "title-height", "btn-width", "btn-height",
+        "bar-height", "bar-border-width", "bar-corner-size", "bar-btn-width",
+        "show-bar", "bar-position", "bar-layout",
+        "icon-width", "icon-height", "icon-padding", "icon-mode",
+        "icon-style", "iconbar-position", "iconbar-bg",
+        "workspaces", "master-ratio",
+        "clock-format", "font", "terminal", "launcher", "modkey",
+        "fade-enabled", "fade-in-ms", "fade-out-ms", "tooltip-delay",
+        "tooltip-font",
+        "title-focus", "title-unfocus", "title-fg", "frame-light",
+        "frame-shadow", "frame-bg", "active-light", "active-shadow",
+        "btn-fg", "bar-bg", "bar-fg", "bar-ws-active", "bar-ws-occupied",
+        "bar-ws-idle", "bar-ws-bg", "bar-border-light", "bar-border-shadow",
+        "bar-fill", "menu-bg", "fb-bg", "fb-light", "fb-shadow", "fb-fg",
+        "tooltip-bg", "tooltip-fg", "tooltip-border", "dialog-bg",
+        "root-bg", "root-bg2", "bind",
+        NULL
+    };
+    for (int i = 0; known[i]; i++)
+        if (strcmp(key, known[i]) == 0) return 1;
+    return 0;
+}
+
 static void cfg_skip(void) {
     while (cfg_pos < cfg_len) {
         while (cfg_pos < cfg_len && (cfg_buf[cfg_pos]==' '||cfg_buf[cfg_pos]=='\t'||
@@ -566,11 +617,21 @@ static void load_config(void) {
     cfg_buf[cfg_len] = '\0';
     fclose(f);
     cfg_pos = 0;
+    preserved_clear();
 
     char key[128], val[512];
+    int form_start;   /* start of the pending comments + form, for preservation */
     while (cfg_pos < cfg_len) {
+        int pre_skip = cfg_pos;
+        form_start = cfg_pos;
         cfg_skip();
-        if (cfg_pos >= cfg_len) break;
+        if (cfg_pos >= cfg_len) {
+            /* only whitespace/comments left — preserve them */
+            if (getenv("MGRDEBUG"))
+                fprintf(stderr, "EOF-break preserve from %d\n", pre_skip);
+            preserved_add_n(cfg_buf + pre_skip, (size_t)(cfg_len - pre_skip));
+            break;
+        }
         if (cfg_buf[cfg_pos] != '(') { cfg_pos++; continue; }
         cfg_pos++; /* skip ( */
         if (!cfg_read_token(key, sizeof(key))) continue;
@@ -691,7 +752,18 @@ static void load_config(void) {
                     char sk[32], sv[128];
                     cfg_read_token(sk, sizeof(sk));
                     cfg_read_token(sv, sizeof(sv));
-                    if (strcmp(sk,"mod")==0) COPY_TRUNK(b->mod,sv);
+                    if (strcmp(sk,"mod")==0) {
+                        /* normalize raw modifier names to rondo's vocabulary
+                         * (mod4 = Super, mod1 = Alt) so the bind editor's
+                         * option menu recognizes them instead of silently
+                         * substituting its default */
+                        if (strcmp(sv,"mod4")==0 || strcmp(sv,"Mod4")==0)
+                            COPY_TRUNK(b->mod, "Super");
+                        else if (strcmp(sv,"mod1")==0 || strcmp(sv,"Mod1")==0)
+                            COPY_TRUNK(b->mod, "Alt");
+                        else
+                            COPY_TRUNK(b->mod,sv);
+                    }
                     else if (strcmp(sk,"key")==0) COPY_TRUNK(b->key,sv);
                     else if (strcmp(sk,"action")==0) COPY_TRUNK(b->action,sv);
                     else if (strcmp(sk,"arg")==0) COPY_TRUNK(b->arg,sv);
@@ -701,14 +773,29 @@ static void load_config(void) {
                 }
             } else cfg_skip_form();
         }
-        /* compound: root-menu — skip */
+        /* compound: root-menu — preserve verbatim */
         else if (strcmp(key,"root-menu")==0) cfg_skip_form();
         else cfg_skip_form();
 
         /* skip to closing ) */
         while (cfg_pos < cfg_len && cfg_buf[cfg_pos]!=')') cfg_pos++;
         if (cfg_pos < cfg_len) cfg_pos++;
+
+        /* Preserve root-menu and unrecognized forms verbatim (with any
+         * comments ahead of them) so Apply doesn't destroy hand-written
+         * config content. */
+        if (getenv("MGRDEBUG"))
+            fprintf(stderr, "key=%s start=%d pos=%d\n", key, form_start, cfg_pos);
+        if (strcmp(key, "root-menu") == 0)
+            preserved_add_n(cfg_buf + form_start, (size_t)(cfg_pos - form_start));
+        else if (is_known_key(key))
+            ; /* modeled: regenerated from the GUI state */
+        else
+            preserved_add_n(cfg_buf + form_start, (size_t)(cfg_pos - form_start));
     }
+    /* trailing comment block after the last form */
+    if (cfg_pos < cfg_len)
+        preserved_add_n(cfg_buf + cfg_pos, (size_t)(cfg_len - cfg_pos));
     free(cfg_buf);
     cfg_buf = NULL;
 }
@@ -914,10 +1001,15 @@ static int save_config(void) {
     fprintf(f, "\n;; Key Bindings\n");
     for (int i = 0; i < num_binds; i++) {
         BindEntry *b = &binds[i];
-        fprintf(f, "(bind (mod %s) (key %s) (action %s)", b->mod, b->key, b->action);
-        if (b->arg[0]) fprintf(f, " (arg %s)", b->arg);
+        fprintf(f, "(bind (mod \"%s\") (key \"%s\") (action \"%s\")", b->mod, b->key, b->action);
+        if (b->arg[0]) fprintf(f, " (arg \"%s\")", b->arg);
         fprintf(f, ")\n");
     }
+    /* Preserved raw forms (root-menu, unrecognized keys, comments) —
+     * captured on read so Apply never destroys hand-written content. */
+    for (int i = 0; i < num_preserved; i++)
+        fprintf(f, "\n%s\n", preserved[i].text);
+    if (num_preserved == 0)
     fprintf(f, "\n;; Root Menu\n(root-menu\n  (\"New Window\" new-window)\n  ()\n  (\"Shuffle Up\" shuffle-up)\n  (\"Shuffle Down\" shuffle-down)\n  ()\n  (\"Refresh\" refresh)\n  (\"Restart\" restart)\n  (\"Quit\" quit))\n");
     fclose(f);
     return 0;

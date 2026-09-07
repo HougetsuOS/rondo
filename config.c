@@ -470,6 +470,10 @@ static unsigned int parse_modmask(const char *s) {
             mask |= Mod1Mask; p += 3;
         } else if (strncmp(p, "Super", 5) == 0 && (p[5] == '+' || p[5] == '\0' || p[5] == ' ')) {
             mask |= Mod4Mask; p += 5;
+        } else if (strncmp(p, "Mod4", 4) == 0 && (p[4] == '+' || p[4] == '\0' || p[4] == ' ')) {
+            mask |= Mod4Mask; p += 4;
+        } else if (strncmp(p, "Mod1", 4) == 0 && (p[4] == '+' || p[4] == '\0' || p[4] == ' ')) {
+            mask |= Mod1Mask; p += 4;
         } else if (strncmp(p, "Shift", 5) == 0 && (p[5] == '+' || p[5] == '\0' || p[5] == ' ')) {
             mask |= ShiftMask; p += 5;
         } else if (strncmp(p, "Ctrl", 4) == 0 && (p[4] == '+' || p[4] == '\0' || p[4] == ' ')) {
