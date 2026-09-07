@@ -1356,11 +1356,6 @@ static void layout_edit_cb(Widget w, XtPointer cd, XtPointer cbs) {
 static void layout_remove_cb(Widget w, XtPointer cd, XtPointer cbs) {
     (void)w; (void)cd; (void)cbs;
     int *sel = NULL, nsel = 0;
-    if (getenv("MGRDEBUG")) {
-        int *pos = NULL, np = 0, cnt = 0;
-        XtVaGetValues(w_layout_list, XmNitemCount, &cnt, NULL);
-        fprintf(stderr, "remove: items=%d\n", cnt);
-    }
     if (!XmListGetSelectedPos(w_layout_list, &sel, &nsel) || nsel < 1) return;
     int idx = sel[0] - 1;
     XtFree((char *)sel);
@@ -1378,16 +1373,24 @@ static void layout_move_cb(Widget w, XtPointer cd, XtPointer cbs) {
     if (!XmListGetSelectedPos(w_layout_list, &sel, &nsel) || nsel < 1) return;
     int idx = sel[0] - 1;
     XtFree((char *)sel);
-    int j = idx + dir;
-    if (idx < 0 || idx >= num_bar_widgets || j < 0 || j >= num_bar_widgets) return;
+    if (idx < 0 || idx >= num_bar_widgets) return;
+
+    /* Reorder within the widget's own side: rondo renders left widgets in
+     * list order, then right widgets in list order, so swapping with an
+     * adjacent entry of the OTHER side would flip both widgets' alignment.
+     * Find the nearest same-side neighbor and swap with that instead. */
+    int j = -1;
+    for (int i = idx + dir; i >= 0 && i < num_bar_widgets; i += dir) {
+        if (bar_layout[i].align == bar_layout[idx].align) { j = i; break; }
+    }
+    if (j < 0) return;   /* already at the end of its side */
+
     BarWidgetEntry tmp = bar_layout[idx];
     bar_layout[idx] = bar_layout[j];
     bar_layout[j] = tmp;
     refresh_layout_list();
     /* keep the moved item selected */
-    XmString it = XmStringCreateLocalized("");
     XmListSelectPos(w_layout_list, j + 1, False);
-    XmStringFree(it);
 }
 
 /* keybindings panel */
@@ -2038,6 +2041,22 @@ static void create_compositing_panel(Widget parent) {
 
 /* ── Background preview ─────────────────────────────────────────────── */
 
+/* XmOptionMenu does not fire XmNvalueChangedCallback for mouse
+ * pulldown selections in all paths — attach activate callbacks to the
+ * pulldown's push-button gadgets instead. */
+static void option_menu_children_activate(Widget om, XtCallbackProc cb,
+                                          XtPointer cd) {
+    (void)cb;
+    Widget pulldown = NULL;
+    XtVaGetValues(om, XmNsubMenuId, &pulldown, NULL);
+    if (!pulldown) return;
+    CompositeWidget cw = (CompositeWidget)pulldown;
+    for (Cardinal i = 0; i < cw->composite.num_children; i++) {
+        Widget b = cw->composite.children[i];
+        XtAddCallback(b, XmNactivateCallback, cb, cd);
+    }
+}
+
 #include <Xm/DrawingA.h>
 static int scale_val(Widget w);
 
@@ -2064,7 +2083,30 @@ static void bg_preview_draw(Widget w) {
     XFillRectangle(d, win, gc, 0, 0, (unsigned)W, (unsigned)H);
 
     int mode = option_menu_index(w_bg_mode);
-    if (mode == 1) {   /* Pattern */
+    if (mode == 2) {   /* Image: stylized placeholder — a photo-ish wedge */
+        gv.foreground = c2;
+        XChangeGC(d, gc, GCForeground, &gv);
+        /* simple "mountain + sun" silhouette so the mode is obvious */
+        {
+            XPoint tri[4] = {
+                { (short)(W * 1 / 8),  (short)H },
+                { (short)(W * 2 / 5),  (short)(H * 1 / 4) },
+                { (short)(W * 5 / 8),  (short)H },
+            };
+            XFillPolygon(d, win, gc, tri, 3, Convex, CoordModeOrigin);
+            XPoint tri2[4] = {
+                { (short)(W * 3 / 8),  (short)H },
+                { (short)(W * 11 / 16), (short)(H * 3 / 8) },
+                { (short)(W * 15 / 16), (short)H },
+            };
+            XFillPolygon(d, win, gc, tri2, 3, Convex, CoordModeOrigin);
+            /* sun */
+            XFillArc(d, win, gc,
+                     (int)(W * 2 / 3), (int)(H * 1 / 8),
+                     (unsigned)(H / 4), (unsigned)(H / 4), 0, 360 * 64);
+        }
+    }
+    else if (mode == 1) {   /* Pattern */
         int pat = option_menu_index(w_bg_pattern);
         int cell = scale_val(w_bg_pattern_size);
         if (cell <= 0) cell = 16;
@@ -2122,7 +2164,9 @@ static void bg_preview_expose_cb(Widget w, XtPointer cd, XtPointer cbs) {
 }
 
 static void bg_preview_redraw_cb(Widget w, XtPointer cd, XtPointer cbs) {
-    (void)w; (void)cd; (void)cbs;
+    if (getenv("MGRDEBUG"))
+        fprintf(stderr, "preview redraw (mode=%d pat=%d)\n",
+                option_menu_index(w_bg_mode), option_menu_index(w_bg_pattern));
     if (w_bg_preview && XtWindow(w_bg_preview))
         bg_preview_draw(w_bg_preview);
 }
@@ -2182,11 +2226,11 @@ static void create_background_panel(Widget parent) {
         w_bg_preview = prev;
         XtAddCallback(prev, XmNexposeCallback, bg_preview_expose_cb, NULL);
         /* redraw when any of the inputs change */
-        XtAddCallback(w_bg_pattern, XmNvalueChangedCallback, bg_preview_redraw_cb, NULL);
+        option_menu_children_activate(w_bg_pattern, (XtCallbackProc)bg_preview_redraw_cb, NULL);
+        option_menu_children_activate(bg_om, (XtCallbackProc)bg_preview_redraw_cb, NULL);
         XtAddCallback(w_bg_pattern_size, XmNvalueChangedCallback, bg_preview_redraw_cb, NULL);
         XtAddCallback(w_bg_color, XmNvalueChangedCallback, bg_preview_redraw_cb, NULL);
         XtAddCallback(w_bg_color2, XmNvalueChangedCallback, bg_preview_redraw_cb, NULL);
-        XtAddCallback(bg_om, XmNvalueChangedCallback, bg_preview_redraw_cb, NULL);
         /* initial paint once the widget is realized and has final geometry */
         XtAppAddTimeOut(XtWidgetToApplicationContext(prev), 0,
                         bg_preview_timer_cb, (XtPointer)prev);
@@ -2223,6 +2267,8 @@ static void create_background_panel(Widget parent) {
             XmNtopAttachment, XmATTACH_FORM, XmNbottomAttachment, XmATTACH_FORM,
             XmNleftAttachment, XmATTACH_WIDGET, XmNleftWidget, lbl3,
             XmNrightAttachment, XmATTACH_FORM, NULL);
+        XtAddCallback(w_bg_image_path, XmNvalueChangedCallback, bg_preview_redraw_cb, NULL);
+        option_menu_children_activate(w_bg_image_mode, (XtCallbackProc)bg_preview_redraw_cb, NULL);
     }
 }
 
