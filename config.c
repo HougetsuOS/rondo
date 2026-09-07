@@ -20,6 +20,7 @@ int    cfg_icon_width   = 56;
 int    cfg_icon_height   = 56;
 int    cfg_icon_padding  = 4;
 IconMode cfg_icon_mode   = ICON_MODE_ICON_TEXT;
+IconStyle cfg_icon_style = ICON_STYLE_BUTTON;
 BarPosition cfg_bar_position    = BAR_POS_TOP;
 BarPosition cfg_iconbar_position = BAR_POS_LEFT;
 int    cfg_num_workspaces = 9;
@@ -663,6 +664,13 @@ static void cfg_apply_form(CfgNode *form) {
         if (mode && strcmp(mode, "icon") == 0)             cfg_icon_mode = ICON_MODE_ICON;
         else if (mode && strcmp(mode, "text") == 0)         cfg_icon_mode = ICON_MODE_TEXT;
         else if (mode && strcmp(mode, "icon-text") == 0)    cfg_icon_mode = ICON_MODE_ICON_TEXT;
+        return;
+    }
+    if (strcmp(key, "icon-style") == 0) {
+        const char *st = cfg_sym_name(cfg_list_nth(args, 0));
+        if (st && strcmp(st, "button") == 0)      cfg_icon_style = ICON_STYLE_BUTTON;
+        else if (st && strcmp(st, "label") == 0)  cfg_icon_style = ICON_STYLE_LABEL;
+        else if (st && strcmp(st, "plain") == 0)  cfg_icon_style = ICON_STYLE_PLAIN;
         return;
     }
     if (strcmp(key, "bar-position") == 0) {

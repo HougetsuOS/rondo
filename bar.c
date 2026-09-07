@@ -1283,13 +1283,18 @@ static void drawiconbar_vertical(void) {
         if (icon_y > content_bot) break;
 
         XftColor *fill = (c == focused) ? &col_title_focus : &col_frame_bg;
-        XftDrawRect(xd, fill, x + 2, icon_y + 2, ICON_W - 4, entry_h - 4);
-        bevel_rect(xd, x, icon_y, ICON_W, entry_h,
-                   2, 2, 2, 2, &col_frame_light, &col_frame_shadow);
-
         int max_chars = ICON_W / 6;
         int namelen = (int)strlen(c->name);
         if (namelen > max_chars) namelen = max_chars;
+
+        /* entry background per icon-style: full button, label-only button,
+           or nothing (icon/text drawn bare on the bar) */
+        if (icon_style == ICON_STYLE_BUTTON ||
+            (icon_style == ICON_STYLE_LABEL && icon_mode == ICON_MODE_TEXT)) {
+            XftDrawRect(xd, fill, x + 2, icon_y + 2, ICON_W - 4, entry_h - 4);
+            bevel_rect(xd, x, icon_y, ICON_W, entry_h,
+                       2, 2, 2, 2, &col_frame_light, &col_frame_shadow);
+        }
 
         switch (icon_mode) {
         case ICON_MODE_ICON:
@@ -1297,6 +1302,15 @@ static void drawiconbar_vertical(void) {
             break;
         case ICON_MODE_TEXT:
             if (namelen > 0) {
+                if (icon_style == ICON_STYLE_LABEL) {
+                    XGlyphInfo lext = client_name_ext(c);
+                    int lw = lext.xOff + 6;
+                    XftDrawRect(xd, fill, x + (ICON_W - lw) / 2, icon_y + 2,
+                                lw, entry_h - 4);
+                    bevel_rect(xd, x + (ICON_W - lw) / 2 - 2, icon_y,
+                               lw + 4, entry_h,
+                               2, 2, 2, 2, &col_frame_light, &col_frame_shadow);
+                }
                 XGlyphInfo ext = client_name_ext(c);
                 int text_x = x + (ICON_W - ext.xOff) / 2;
                 int text_y = icon_y + (entry_h + text_h) / 2 - xftfont->descent;
@@ -1308,6 +1322,15 @@ static void drawiconbar_vertical(void) {
         case ICON_MODE_ICON_TEXT:
             draw_icon_scaled(c, buf, x + 4, icon_y + 4, ICON_W - 8, ICON_H - 8);
             if (namelen > 0) {
+                if (icon_style == ICON_STYLE_LABEL) {
+                    XGlyphInfo lext = client_name_ext(c);
+                    int lw = lext.xOff + 6;
+                    XftDrawRect(xd, fill, x + (ICON_W - lw) / 2, icon_y + ICON_H + 2,
+                                lw, text_h + 4);
+                    bevel_rect(xd, x + (ICON_W - lw) / 2 - 2, icon_y + ICON_H,
+                               lw + 4, text_h + 8,
+                               2, 2, 2, 2, &col_frame_light, &col_frame_shadow);
+                }
                 XGlyphInfo ext = client_name_ext(c);
                 int text_x = x + (ICON_W - ext.xOff) / 2;
                 int text_y = icon_y + ICON_H + 4 + xftfont->ascent;
@@ -1425,13 +1448,17 @@ static void drawiconbar_horizontal(void) {
         if (icon_x > content_right) break;
 
         XftColor *fill = (c == focused) ? &col_title_focus : &col_frame_bg;
-        XftDrawRect(xd, fill, icon_x + 2, 2, ICON_W - 4, entry_h - 4);
-        bevel_rect(xd, icon_x, 0, ICON_W, entry_h,
-                   2, 2, 2, 2, &col_frame_light, &col_frame_shadow);
-
         int max_chars = ICON_W / 6;
         int namelen = (int)strlen(c->name);
         if (namelen > max_chars) namelen = max_chars;
+
+        /* entry background per icon-style (see drawiconbar_vertical) */
+        if (icon_style == ICON_STYLE_BUTTON ||
+            (icon_style == ICON_STYLE_LABEL && icon_mode == ICON_MODE_TEXT)) {
+            XftDrawRect(xd, fill, icon_x + 2, 2, ICON_W - 4, entry_h - 4);
+            bevel_rect(xd, icon_x, 0, ICON_W, entry_h,
+                       2, 2, 2, 2, &col_frame_light, &col_frame_shadow);
+        }
 
         switch (icon_mode) {
         case ICON_MODE_ICON:
@@ -1439,6 +1466,15 @@ static void drawiconbar_horizontal(void) {
             break;
         case ICON_MODE_TEXT:
             if (namelen > 0) {
+                if (icon_style == ICON_STYLE_LABEL) {
+                    XGlyphInfo lext = client_name_ext(c);
+                    int lw = lext.xOff + 6;
+                    XftDrawRect(xd, fill, icon_x + (ICON_W - lw) / 2, 2,
+                                lw, entry_h - 4);
+                    bevel_rect(xd, icon_x + (ICON_W - lw) / 2 - 2, 0,
+                               lw + 4, entry_h,
+                               2, 2, 2, 2, &col_frame_light, &col_frame_shadow);
+                }
                 XGlyphInfo ext = client_name_ext(c);
                 int text_x = icon_x + (ICON_W - ext.xOff) / 2;
                 int text_y = (entry_h + text_h) / 2 - xftfont->descent;
@@ -1450,6 +1486,16 @@ static void drawiconbar_horizontal(void) {
         case ICON_MODE_ICON_TEXT:
             draw_icon_scaled(c, buf, icon_x + 4, 4, ICON_W - 8, ICON_H - 8);
             if (namelen > 0) {
+                if (icon_style == ICON_STYLE_LABEL) {
+                    XGlyphInfo lext = client_name_ext(c);
+                    int lw = lext.xOff + 6;
+                    int ly = entry_h - text_h - 6;
+                    XftDrawRect(xd, fill, icon_x + (ICON_W - lw) / 2, ly,
+                                lw, text_h + 4);
+                    bevel_rect(xd, icon_x + (ICON_W - lw) / 2 - 2, ly - 2,
+                               lw + 4, text_h + 8,
+                               2, 2, 2, 2, &col_frame_light, &col_frame_shadow);
+                }
                 XGlyphInfo ext = client_name_ext(c);
                 int text_x = icon_x + (ICON_W - ext.xOff) / 2;
                 int text_y = entry_h - xftfont->descent - 2;

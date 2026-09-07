@@ -157,11 +157,21 @@ typedef enum { BAR_WIDGET_WS, BAR_WIDGET_TITLE, BAR_WIDGET_LAYOUT, BAR_WIDGET_CL
 /* icon bar display mode */
 typedef enum { ICON_MODE_ICON, ICON_MODE_TEXT, ICON_MODE_ICON_TEXT } IconMode;
 
+/* icon bar entry style: how much button-like background each entry gets */
+typedef enum {
+    ICON_STYLE_BUTTON,  /* full entry background + bevel (classic mwm) */
+    ICON_STYLE_LABEL,   /* icon drawn bare; only the text label is a button */
+    ICON_STYLE_PLAIN    /* icon and text both drawn bare on the bar */
+} IconStyle;
+
 /* bar position: which screen edge the bar is attached to */
 typedef enum { BAR_POS_TOP, BAR_POS_BOTTOM, BAR_POS_LEFT, BAR_POS_RIGHT } BarPosition;
 
 extern IconMode cfg_icon_mode;
 #define icon_mode cfg_icon_mode
+
+extern IconStyle cfg_icon_style;
+#define icon_style cfg_icon_style
 
 extern BarPosition cfg_bar_position;
 extern BarPosition cfg_iconbar_position;

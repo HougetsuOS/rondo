@@ -66,6 +66,7 @@ typedef struct {
     int bar_position;   /* 0=top,1=bottom,2=left,3=right */
     int iconbar_position;
     int icon_mode;      /* 0=icon,1=text,2=icon-text */
+    int icon_style;     /* 0=button,1=label,2=plain */
     /* background */
     int bg_mode;        /* 0=solid,1=pattern,2=image */
     int bg_pattern;     /* 0=checkerboard,1=diagonal,2=horizontal,3=vertical,4=dots,5=crosshatch,6=weave */
@@ -175,7 +176,7 @@ static void set_defaults(void) {
     strcpy(cfg.modkey, "Alt");
     strcpy(cfg.clock_format, " %a %m/%d %H:%M ");
     cfg.tooltip_font[0] = '\0';
-    cfg.bar_position = 0; cfg.iconbar_position = 2; cfg.icon_mode = 2;
+    cfg.bar_position = 0; cfg.iconbar_position = 2; cfg.icon_mode = 2; cfg.icon_style = 0;
     cfg.bg_mode = 1; cfg.bg_pattern = 0; cfg.bg_image_mode = 1;
     cfg.bg_pattern_size = 0;
     strcpy(cfg.bg_color, "#303030"); strcpy(cfg.bg_color2, "#404040");
@@ -506,6 +507,12 @@ static int parse_icon_mode(const char *s) {
     if (strcmp(s,"icon-text")==0) return 2;
     return 2;
 }
+static int parse_icon_style(const char *s) {
+    if (strcmp(s,"button")==0) return 0;
+    if (strcmp(s,"label")==0) return 1;
+    if (strcmp(s,"plain")==0) return 2;
+    return 0;
+}
 static int parse_widget_type(const char *s) {
     if (strcmp(s,"ws")==0) return BW_WS;
     if (strcmp(s,"title")==0) return BW_TITLE;
@@ -595,6 +602,7 @@ static void load_config(void) {
         else if (strcmp(key,"bar-position")==0 && cfg_read_token(val,sizeof(val))) cfg.bar_position=parse_bar_position(val);
         else if (strcmp(key,"iconbar-position")==0 && cfg_read_token(val,sizeof(val))) cfg.iconbar_position=parse_bar_position(val);
         else if (strcmp(key,"icon-mode")==0 && cfg_read_token(val,sizeof(val))) cfg.icon_mode=parse_icon_mode(val);
+        else if (strcmp(key,"icon-style")==0 && cfg_read_token(val,sizeof(val))) cfg.icon_style=parse_icon_style(val);
         /* colors */
         else if (strcmp(key,"title-focus")==0) cfg_read_token(cfg.col_title_focus,sizeof(cfg.col_title_focus));
         else if (strcmp(key,"title-unfocus")==0) cfg_read_token(cfg.col_title_unfocus,sizeof(cfg.col_title_unfocus));
@@ -796,6 +804,7 @@ static void load_user_palettes(void) {
 
 static const char *bar_pos_str(int v) { return (const char*[]){"top","bottom","left","right"}[v]; }
 static const char *icon_mode_str(int v) { return (const char*[]){"icon","text","icon-text"}[v]; }
+static const char *icon_style_str(int v) { return (const char*[]){"button","label","plain"}[v]; }
 static const char *widget_type_str(int v) {
     return (const char*[]){"ws","title","clock","load","mem","disk","bat","vol","cpu","net","temp"}[v];
 }
@@ -840,6 +849,7 @@ static int save_config(void) {
     fprintf(f, "(icon-height %d)\n", cfg.icon_height);
     fprintf(f, "(icon-padding %d)\n", cfg.icon_padding);
     fprintf(f, "(icon-mode %s)\n", icon_mode_str(cfg.icon_mode));
+    fprintf(f, "(icon-style %s)\n", icon_style_str(cfg.icon_style));
     fprintf(f, "(iconbar-position %s)\n", bar_pos_str(cfg.iconbar_position));
     fprintf(f, "\n;; Layout\n");
     fprintf(f, "(workspaces %d)\n", cfg.num_workspaces);
@@ -962,7 +972,7 @@ static Widget w_frame_width, w_title_height, w_bar_height, w_btn_width, w_btn_he
 static Widget w_bar_border_width, w_bar_corner_size, w_bar_btn_width;
 static Widget w_icon_width, w_icon_height, w_icon_padding, w_num_workspaces;
 static Widget w_master_ratio, w_show_bar;
-static Widget w_bar_position, w_iconbar_position, w_icon_mode;
+static Widget w_bar_position, w_iconbar_position, w_icon_mode, w_icon_style;
 static Widget w_fade_enabled, w_fade_in_ms, w_fade_out_ms, w_tooltip_delay;
 static Widget w_font, w_terminal, w_launcher, w_modkey, w_clock_format, w_tooltip_font;
 static Widget w_bg_mode, w_bg_pattern, w_bg_color, w_bg_color2, w_bg_image_path, w_bg_image_mode;
@@ -1241,6 +1251,18 @@ static void create_bar_panel(Widget parent) {
         static char *im_opts[] = {"icon","text","icon-text"};
         w_icon_mode = make_option_menu(row, "imode", im_opts, 3, cfg.icon_mode);
         XtVaSetValues(w_icon_mode,
+            XmNtopAttachment, XmATTACH_FORM, XmNbottomAttachment, XmATTACH_FORM,
+            XmNleftAttachment, XmATTACH_WIDGET, XmNleftWidget, lbl,
+            XmNrightAttachment, XmATTACH_FORM, NULL);
+    }
+    {
+        Widget row = XtVaCreateManagedWidget("row", xmFormWidgetClass, rc, NULL);
+        Widget lbl = XtVaCreateManagedWidget("Icon Style", xmLabelWidgetClass, row,
+            XmNtopAttachment, XmATTACH_FORM, XmNbottomAttachment, XmATTACH_FORM,
+            XmNleftAttachment, XmATTACH_FORM, XmNleftOffset, 4, NULL);
+        static char *is_opts[] = {"button","label","plain"};
+        w_icon_style = make_option_menu(row, "istyle", is_opts, 3, cfg.icon_style);
+        XtVaSetValues(w_icon_style,
             XmNtopAttachment, XmATTACH_FORM, XmNbottomAttachment, XmATTACH_FORM,
             XmNleftAttachment, XmATTACH_WIDGET, XmNleftWidget, lbl,
             XmNrightAttachment, XmATTACH_FORM, NULL);
@@ -1865,6 +1887,7 @@ static void push_cfg_to_widgets(void) {
     /* option menus */
     set_option_menu_idx(w_bar_position, cfg.bar_position);
     set_option_menu_idx(w_icon_mode, cfg.icon_mode);
+    set_option_menu_idx(w_icon_style, cfg.icon_style);
     set_option_menu_idx(w_iconbar_position, cfg.iconbar_position);
     set_option_menu_idx(w_bg_mode, cfg.bg_mode);
     set_option_menu_idx(w_bg_pattern, cfg.bg_pattern);
@@ -1915,6 +1938,7 @@ static void read_gui_state(void) {
     /* option menus */
     cfg.bar_position = option_menu_index(w_bar_position);
     cfg.icon_mode = option_menu_index(w_icon_mode);
+    cfg.icon_style = option_menu_index(w_icon_style);
     cfg.iconbar_position = option_menu_index(w_iconbar_position);
     cfg.bg_mode = option_menu_index(w_bg_mode);
     cfg.bg_pattern = option_menu_index(w_bg_pattern);
