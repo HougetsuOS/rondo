@@ -1467,6 +1467,17 @@ static void drawiconbar_horizontal(void) {
     XFlush(dpy);
 }
 
+/* Keep the icon bar (and status bar) above all client windows.
+ * Called after every XRaiseWindow on a client frame so minimized-window
+ * icons stay visible even when the focused window overlaps them.
+ * barwin goes above iconbar so it covers the overlapping corner. */
+void wm_restack_bars(void) {
+    if (iconbar_visible())
+        XRaiseWindow(dpy, iconbar);
+    if (show_bar)
+        XRaiseWindow(dpy, barwin);
+}
+
 void updateiconbar(void) {
     if (iconbar_visible()) {
         BarGeometry g = calc_bar_geometry();

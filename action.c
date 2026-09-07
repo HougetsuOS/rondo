@@ -59,6 +59,7 @@ void cyclewindows(const WmArg *arg) {
             if (c->ws == curws && !c->is_minimized && !c->is_hidden) {
                 focus(c);
                 XRaiseWindow(dpy, c->frame_shell ? XtWindow(c->frame_shell) : c->win);
+    wm_restack_bars();
                 return;
             }
         return;
@@ -83,6 +84,7 @@ void cyclewindows(const WmArg *arg) {
     } while (c->ws != curws || c->is_minimized || c->is_hidden);
     focus(c);
     XRaiseWindow(dpy, c->frame_shell ? XtWindow(c->frame_shell) : c->win);
+    wm_restack_bars();
 }
 
 void lowerwindow(const WmArg *arg) {
@@ -219,6 +221,7 @@ void togglefloat(const WmArg *arg) {
         XMoveResizeWindow(dpy, focused->win, cx, cy, cw, ch);
         send_configure_notify(focused);
         XRaiseWindow(dpy, XtWindow(focused->frame_shell));
+    wm_restack_bars();
     } else {
         focused->is_floating = 0;
         btree_add(focused);
@@ -278,6 +281,7 @@ void togglefullscreen(const WmArg *arg) {
         frame_to_client(focused->w, focused->h, &cx, &cy, &cw, &ch, focused->no_decor);
         XMoveResizeWindow(dpy, focused->win, cx, cy, cw, ch);
         XRaiseWindow(dpy, XtWindow(focused->frame_shell));
+    wm_restack_bars();
         updateframe(focused);
         send_configure_notify(focused);
         _XmPlatChangeProperty(dpy, (unsigned long)focused->win, net_wm_state, XA_ATOM, 32, PropModeReplace, (const unsigned char *)&net_wm_state_fullscreen, 1);

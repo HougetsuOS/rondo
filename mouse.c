@@ -188,6 +188,7 @@ void mousemove(Client *c, int button, int edge, int x_root, int y_root) {
             }
             updateframe(c);
             send_configure_notify(c);
+            wm_restack_bars();
             return;
         }
     }

@@ -334,6 +334,10 @@ void focus(Client *c) {
     update_active_window();
     updateframe(c);
     defer_schedule();
+    /* keep the icon bar (and status bar) above client windows whenever
+     * the icon bar is visible — focused windows must not cover the
+     * minimized-window icons */
+    wm_restack_bars();
 }
 
 /* ── manage / unmanage ──────────────────────────────────────────────── */
@@ -661,6 +665,7 @@ void manage(Window w, XWindowAttributes *wa) {
         defer_schedule();
         updateframe(c);
         focus(c);
+        wm_restack_bars();
     } else {
         set_wm_state(c, IconicState);
     }

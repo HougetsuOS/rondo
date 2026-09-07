@@ -63,6 +63,7 @@ int handle_buttonpress(XButtonEvent *ev) {
         free(stack_dyn);
         if (c && (ev->button == Button1 || ev->button == Button3)) {
             XRaiseWindow(dpy, XtWindow(c->frame_shell));
+    wm_restack_bars();
             focus(c);
             if (!c->is_floating && ev->button == Button1) {
                 /* Alt+LClick on tiled: make floating, then drag from title */

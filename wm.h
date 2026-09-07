@@ -337,6 +337,7 @@ int bar_effective_thickness(void);
 int is_horizontal(BarPosition p);
 int is_vertical(BarPosition p);
 void drawbar(void);
+void wm_restack_bars(void);
 void start_bar_timer(void);
 void handle_bar_click(int x, int y);
 void handle_bar_scroll(int x, int y, int button);

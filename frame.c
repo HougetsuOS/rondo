@@ -614,6 +614,7 @@ void frame_btn_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) {
                  * so our XGrabPointer in mousemove() can take effect */
                 XtUngrabPointer(w, bev_time);
                 XRaiseWindow(dpy, XtWindow(c->frame_shell));
+    wm_restack_bars();
                 focus(c);
                 if (!c->is_floating && bev_button == Button1) {
                     /* Alt+LClick on tiled: make floating, then drag from title */
@@ -656,6 +657,7 @@ void frame_btn_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) {
                 c->pressed_btn = hit;
                 drawframe(c);
                 XRaiseWindow(dpy, XtWindow(c->frame_shell));
+    wm_restack_bars();
                 focus(c);
                 if (c->is_floating) {
                     XtUngrabPointer(w, bev_time);
@@ -683,6 +685,7 @@ void frame_btn_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) {
             *cont = False;
             XtUngrabPointer(w, bev_time);
             XRaiseWindow(dpy, XtWindow(c->frame_shell));
+    wm_restack_bars();
             focus(c);
             mousemove(c, Button3, edge, _XmPlatEventRootX(pev), _XmPlatEventRootY(pev));
             return;
