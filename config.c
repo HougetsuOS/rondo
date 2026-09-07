@@ -944,7 +944,17 @@ static void cfg_apply_form(CfgNode *form) {
                 } else if (av->type == CFG_FLOAT) {
                     k.arg.f = (float)av->u.fval;
                 } else if (av->type == CFG_STRING) {
-                    k.arg.v = alloc_spawn_argv(av->u.sval);
+                    /* rondomgr writes every arg quoted (e.g. (arg "2")),
+                       including numbers for viewworkspace/movetoworkspace.
+                       A purely numeric string must land in the .ui slot —
+                       storing the string pointer there and reading .ui
+                       yields the pointer value as the workspace number. */
+                    char *end = NULL;
+                    long v = strtol(av->u.sval, &end, 10);
+                    if (end && *end == '\0' && end != av->u.sval)
+                        k.arg.ui = (unsigned int)v;
+                    else
+                        k.arg.v = alloc_spawn_argv(av->u.sval);
                 } else if (av->type == CFG_SYMBOL) {
                     /* special: "terminal" or "launcher" for spawn */
                     k.arg.v = NULL;
