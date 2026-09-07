@@ -43,31 +43,55 @@ static void ipc_disconnect(int slot)
     c->len = 0;
 }
 
-static void ipc_dispatch(const char *line)
+/* reply to the IPC client that sent this command (slot < 0 = no reply) */
+static void ipc_reply(int slot, const char *msg)
+{
+    if (slot < 0 || msg == NULL) return;
+    int fd = ipc_clients[slot].fd;
+    if (fd < 0) return;
+    ssize_t n = write(fd, msg, strlen(msg));
+    (void)n;
+}
+
+static void ipc_dispatch(const char *line, int reply_slot)
 {
     while (*line == ' ' || *line == '\t') line++;
     if (*line == '\0' || *line == '#') return;
 
     if (strcmp(line, "reload") == 0) {
         reloadconfig(NULL);
+        ipc_reply(reply_slot, "OK\n");
     } else if (strncmp(line, "view ", 5) == 0) {
         WmArg arg = {0};
         arg.ui = (unsigned int)atoi(line + 5);
         viewworkspace(&arg);
+        ipc_reply(reply_slot, "OK\n");
     } else if (strncmp(line, "move ", 5) == 0) {
         WmArg arg = {0};
         arg.ui = (unsigned int)atoi(line + 5);
         movetoworkspace(&arg);
+        ipc_reply(reply_slot, "OK\n");
     } else if (strcmp(line, "quit") == 0) {
+        ipc_reply(reply_slot, "OK\n");
         quit(NULL);
     } else if (strcmp(line, "arrange") == 0) {
         arrange();
+        ipc_reply(reply_slot, "OK\n");
     } else if (strcmp(line, "float") == 0) {
         togglefloat(NULL);
+        ipc_reply(reply_slot, "OK\n");
     } else if (strcmp(line, "fullscreen") == 0) {
         togglefullscreen(NULL);
+        ipc_reply(reply_slot, "OK\n");
+    } else if (strcmp(line, "restart") == 0) {
+        /* clean handover: exec the next WM instance with windows intact
+           (same path as the SIGTERM handler / in-WM restart) */
+        ipc_reply(reply_slot, "OK\n");
+        restart_wm();
     } else {
-        fprintf(stderr, "rondo: unknown IPC command: '%s'\n", line);
+        char msg[128];
+        snprintf(msg, sizeof(msg), "ERR unknown command '%s'\n", line);
+        ipc_reply(reply_slot, msg);
     }
 }
 
@@ -104,7 +128,7 @@ static void ipc_client_cb(XtPointer data, int *fd, XtInputId *id)
     char *nl;
     while ((nl = strchr(start, '\n')) != NULL) {
         *nl = '\0';
-        ipc_dispatch(start);
+        ipc_dispatch(start, slot);
         start = nl + 1;
     }
 

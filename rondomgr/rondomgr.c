@@ -7,6 +7,8 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 #include <Xm/Xm.h>
+#include <stdarg.h>
+#include <ctype.h>
 #include <Xm/Form.h>
 #include <Xm/RowColumn.h>
 #include <Xm/Label.h>
@@ -27,6 +29,7 @@
 #include <X11/Xatom.h>
 #include <X11/Xutil.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <sys/un.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1047,9 +1050,33 @@ static int ipc_send(const char *cmd)
     size_t len = strlen(cmd);
     ssize_t n = send(fd, cmd, len, MSG_NOSIGNAL);
     if (n > 0) send(fd, "\n", 1, MSG_NOSIGNAL);
+    if (n != (ssize_t)len) { close(fd); return -1; }
 
+    /* rondo replies "OK\n" or "ERR <msg>\n" — read it (bounded wait) */
+    char reply[256];
+    size_t got = 0;
+    while (got < sizeof(reply) - 1) {
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(fd, &rfds);
+        struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
+        int r = select(fd + 1, &rfds, NULL, NULL, &tv);
+        if (r <= 0) break;
+        ssize_t k = recv(fd, reply + got, sizeof(reply) - 1 - got, 0);
+        if (k <= 0) break;
+        got += (size_t)k;
+        reply[got] = '\0';
+        if (strchr(reply, '\n')) break;
+    }
     close(fd);
-    return (n == (ssize_t)len) ? 0 : -1;
+    if (n != (ssize_t)len) return -1;
+    if (got > 0) {
+        reply[got] = '\0';
+        if (strncmp(reply, "OK", 2) == 0) return 0;
+        if (strncmp(reply, "ERR", 3) == 0) return -2;  /* rondo-side error */
+        return 0;  /* unknown reply but transport worked */
+    }
+    return 0;  /* no reply (old rondo) — transport worked */
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -2053,22 +2080,179 @@ static void read_gui_state(void) {
     }
 }
 
+/* ── validation ────────────────────────────────────────────────────── */
+
+#define MAX_PROBLEMS 16
+
+typedef struct {
+    char msgs[MAX_PROBLEMS][256];
+    int num;
+} Problems;
+
+static void problem_add(Problems *p, const char *fmt, ...) {
+    if (p->num >= MAX_PROBLEMS) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(p->msgs[p->num], sizeof(p->msgs[0]), fmt, ap);
+    va_end(ap);
+    p->num++;
+}
+
+/* is this a color rondo will accept? #RGB/#RRGGBB/#RRGGBBAA or an X color
+ * name resolvable on the default screen */
+static int color_ok(const char *s) {
+    if (!s || !*s) return 0;
+    size_t len = strlen(s);
+    if (s[0] == '#') {
+        if (len != 4 && len != 7 && len != 9) return 0;
+        for (size_t i = 1; i < len; i++)
+            if (!isxdigit((unsigned char)s[i])) return 0;
+        return 1;
+    }
+    /* named color — probe the server */
+    Display *d = XtDisplay(toplevel);
+    XColor c;
+    return XParseColor(d, DefaultColormap(d, DefaultScreen(d)), s, &c) != 0;
+}
+
+static int color_ok_argb(const char *s) {
+    /* ARGB colors additionally allow #RRGGBBAA (8 hex digits) */
+    if (color_ok(s)) return 1;
+    if (s && s[0] == '#' && strlen(s) == 9) {
+        for (int i = 1; i < 9; i++)
+            if (!isxdigit((unsigned char)s[i])) return 0;
+        return 1;
+    }
+    return 0;
+}
+
+static void validate_cfg(Problems *p) {
+    /* colors: plain visual vs ARGB-capable */
+    if (!color_ok(cfg.col_title_focus))    problem_add(p, "Title Focus: not a valid color (%s)", cfg.col_title_focus);
+    if (!color_ok(cfg.col_title_unfocus))  problem_add(p, "Title Unfocus: not a valid color (%s)", cfg.col_title_unfocus);
+    if (!color_ok(cfg.col_title_fg))       problem_add(p, "Title FG: not a valid color (%s)", cfg.col_title_fg);
+    if (!color_ok(cfg.col_frame_light))    problem_add(p, "Frame Light: not a valid color (%s)", cfg.col_frame_light);
+    if (!color_ok(cfg.col_frame_shadow))   problem_add(p, "Frame Shadow: not a valid color (%s)", cfg.col_frame_shadow);
+    if (!color_ok(cfg.col_frame_bg))       problem_add(p, "Frame BG: not a valid color (%s)", cfg.col_frame_bg);
+    if (!color_ok(cfg.col_active_light))   problem_add(p, "Active Light: not a valid color (%s)", cfg.col_active_light);
+    if (!color_ok(cfg.col_active_shadow))  problem_add(p, "Active Shadow: not a valid color (%s)", cfg.col_active_shadow);
+    if (!color_ok(cfg.col_btn_fg))         problem_add(p, "Button FG: not a valid color (%s)", cfg.col_btn_fg);
+    if (!color_ok(cfg.col_bar_bg))         problem_add(p, "Bar BG: not a valid color (%s)", cfg.col_bar_bg);
+    if (!color_ok(cfg.col_bar_fg))         problem_add(p, "Bar FG: not a valid color (%s)", cfg.col_bar_fg);
+    if (!color_ok(cfg.col_bar_ws_active))  problem_add(p, "Bar WS Active: not a valid color (%s)", cfg.col_bar_ws_active);
+    if (!color_ok(cfg.col_bar_ws_occupied))problem_add(p, "Bar WS Occupied: not a valid color (%s)", cfg.col_bar_ws_occupied);
+    if (!color_ok(cfg.col_bar_ws_idle))    problem_add(p, "Bar WS Idle: not a valid color (%s)", cfg.col_bar_ws_idle);
+    if (!color_ok(cfg.col_bar_ws_bg))      problem_add(p, "Bar WS BG: not a valid color (%s)", cfg.col_bar_ws_bg);
+    if (!color_ok(cfg.col_bar_border_light))  problem_add(p, "Bar Border Light: not a valid color (%s)", cfg.col_bar_border_light);
+    if (!color_ok(cfg.col_bar_border_shadow)) problem_add(p, "Bar Border Shadow: not a valid color (%s)", cfg.col_bar_border_shadow);
+    if (!color_ok(cfg.col_bar_fill))       problem_add(p, "Bar Fill: not a valid color (%s)", cfg.col_bar_fill);
+    if (!color_ok(cfg.bg_color))           problem_add(p, "Root BG: not a valid color (%s)", cfg.bg_color);
+    if (!color_ok(cfg.bg_color2))          problem_add(p, "Root BG2: not a valid color (%s)", cfg.bg_color2);
+    /* ARGB-capable set */
+    if (!color_ok_argb(cfg.col_menu_bg))       problem_add(p, "Menu BG: not a valid color (%s)", cfg.col_menu_bg);
+    if (!color_ok_argb(cfg.col_iconbar_bg))    problem_add(p, "Iconbar BG: not a valid color (%s)", cfg.col_iconbar_bg);
+    if (!color_ok_argb(cfg.col_fb_bg))         problem_add(p, "Feedback BG: not a valid color (%s)", cfg.col_fb_bg);
+    if (!color_ok_argb(cfg.col_fb_fg))         problem_add(p, "Feedback FG: not a valid color (%s)", cfg.col_fb_fg);
+    if (!color_ok_argb(cfg.col_fb_light))      problem_add(p, "Feedback Light: not a valid color (%s)", cfg.col_fb_light);
+    if (!color_ok_argb(cfg.col_fb_shadow))     problem_add(p, "Feedback Shadow: not a valid color (%s)", cfg.col_fb_shadow);
+    if (!color_ok_argb(cfg.col_tooltip_bg))    problem_add(p, "Tooltip BG: not a valid color (%s)", cfg.col_tooltip_bg);
+    if (!color_ok_argb(cfg.col_tooltip_fg))    problem_add(p, "Tooltip FG: not a valid color (%s)", cfg.col_tooltip_fg);
+    if (!color_ok_argb(cfg.col_tooltip_border))problem_add(p, "Tooltip Border: not a valid color (%s)", cfg.col_tooltip_border);
+    if (!color_ok_argb(cfg.col_dialog_bg))     problem_add(p, "Dialog BG: not a valid color (%s)", cfg.col_dialog_bg);
+    /* non-empty strings */
+    if (!cfg.font[0])         problem_add(p, "Font is empty");
+    if (!cfg.terminal[0])     problem_add(p, "Terminal command is empty");
+    if (!cfg.launcher[0])     problem_add(p, "Launcher command is empty");
+    if (!cfg.modkey[0])       problem_add(p, "Modkey is empty");
+    /* ranges (scales clamp, but belt-and-braces) */
+    if (cfg.num_workspaces < 1 || cfg.num_workspaces > 20)
+        problem_add(p, "Workspaces must be 1..20 (%d)", cfg.num_workspaces);
+    if (cfg.master_ratio < 0.05f || cfg.master_ratio > 0.95f)
+        problem_add(p, "Master ratio must be 0.05..0.95 (%.2f)", cfg.master_ratio);
+}
+
+/* Motif error-dialog listing problems; returns after user dismisses */
+static void show_problems_dialog(Problems *p) {
+    char body[2048];
+    size_t off = 0;
+    body[0] = '\0';
+    int shown = 0;
+    for (int i = 0; i < p->num && off < sizeof(body) - 80; i++) {
+        int n = snprintf(body + off, sizeof(body) - off, "%s%s",
+                         shown ? "\n" : "", p->msgs[i]);
+        if (n < 0) break;
+        off += (size_t)n;
+        shown++;
+    }
+    if (p->num > shown)
+        snprintf(body + off, sizeof(body) - off, "\n... and %d more", p->num - shown);
+
+    Widget dlg = XmCreateErrorDialog(toplevel, "validationDlg", NULL, 0);
+    XmString title = XmStringCreateLocalized("rondomgr — Invalid Settings");
+    XmString msg = XmStringCreateLocalized(body);
+    XtVaSetValues(dlg, XmNdialogTitle, title,
+                  XmNmessageString, msg,
+                  XmNdialogStyle, XmDIALOG_OK_BUTTON, NULL);
+    XmStringFree(title);
+    XmStringFree(msg);
+    /* remove the unwanted help button */
+    Widget help = XtNameToWidget(dlg, "Help");
+    if (help) XtUnmanageChild(help);
+    XtManageChild(dlg);
+}
+
 /* ── apply / save callbacks ────────────────────────────────────────── */
 
 static void apply_cb(Widget w, XtPointer client_data, XtPointer call_data) {
     (void)w; (void)call_data;
     int save_only = client_data ? 1 : 0;
     read_gui_state();
+    Problems probs;
+    probs.num = 0;
+    validate_cfg(&probs);
+    if (probs.num > 0) {
+        show_problems_dialog(&probs);
+        return;
+    }
     if (save_config() == 0) {
         saved_cfg = cfg;
         current_palette_idx = match_current_palette();
         rebuild_palette_menu();
         if (!save_only) {
-            if (ipc_send("reload") < 0)
-                fprintf(stderr, "rondomgr: failed to send reload command\n");
+            int rc = ipc_send("reload");
+            if (rc != 0) {
+                char msg[512];
+                if (rc == -2)
+                    snprintf(msg, sizeof(msg),
+                             "rondo rejected the reload (see rondo's log).\n"
+                             "The config file was saved.");
+                else
+                    snprintf(msg, sizeof(msg),
+                             "Could not reach rondo's IPC socket.\n"
+                             "The config was saved; restart rondo to apply it.");
+                Widget dlg = XmCreateErrorDialog(toplevel, "ipcDlg", NULL, 0);
+                XmString title = XmStringCreateLocalized("rondomgr — Reload Failed");
+                XmString xmsg = XmStringCreateLocalized(msg);
+                XtVaSetValues(dlg, XmNdialogStyle, XmDIALOG_OK_BUTTON, NULL);
+                XtVaSetValues(dlg, XmNmessageString, xmsg, NULL);
+                XmStringFree(xmsg);
+                XmStringFree(title);
+                Widget help = XtNameToWidget(dlg, "Help");
+                if (help) XtUnmanageChild(help);
+                XtManageChild(dlg);
+            }
         }
-    } else
-        fprintf(stderr, "rondomgr: failed to save config\n");
+    } else {
+        Widget dlg = XmCreateErrorDialog(toplevel, "saveDlg", NULL, 0);
+        XmString xmsg = XmStringCreateLocalized(
+            "Could not write ~/.rondorc (permissions? disk full?)");
+        XtVaSetValues(dlg, XmNdialogStyle, XmDIALOG_OK_BUTTON, NULL);
+        XtVaSetValues(dlg, XmNmessageString, xmsg, NULL);
+        XmStringFree(xmsg);
+        Widget help = XtNameToWidget(dlg, "Help");
+        if (help) XtUnmanageChild(help);
+        XtManageChild(dlg);
+    }
 }
 
 static void reset_changes_cb(Widget w, XtPointer client_data, XtPointer call_data) {
