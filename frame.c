@@ -2,6 +2,7 @@
  * rondo — frame drawing and interaction
  */
 #include "wm.h"
+#include "xmplat_seam.h"
 
 /* ── 3D bevel drawing ─────────────────────────────────────────────────── */
 
@@ -553,7 +554,8 @@ static void frame_set_cursor(Client *c, Cursor cur) {
 void frame_expose_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) {
     (void)w; (void)cont;
     Client *c = (Client *)client_data;
-    if (ev->type == Expose && ev->xexpose.count == 0)
+    XmPlatEvent pev = _XmPlatEventOf(ev);
+    if (_XmPlatEventIsType(pev, Expose) && _XmPlatEventCount(pev) == 0)
         drawframe(c);
 }
 
@@ -561,10 +563,11 @@ void frame_enter_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) 
     (void)w; (void)cont;
     Client *c = (Client *)client_data;
     if (c->ws != curws) return;
-    if (ev->type == EnterNotify) {
+    XmPlatEvent pev = _XmPlatEventOf(ev);
+    if (_XmPlatEventIsEnter(pev)) {
         focus(c);
         /* set cursor based on where the pointer entered */
-        int edge = frame_edge_hit(c, ev->xcrossing.x, ev->xcrossing.y);
+        int edge = frame_edge_hit(c, _XmPlatEventX(pev), _XmPlatEventY(pev));
         if (edge != EDGE_NONE && edge > 0 && edge < 16 && curs_resize[edge])
             frame_set_cursor(c, curs_resize[edge]);
         else
@@ -575,15 +578,17 @@ void frame_enter_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) 
 void frame_leave_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) {
     (void)w; (void)cont;
     Client *c = (Client *)client_data;
-    if (ev->type == LeaveNotify)
+    XmPlatEvent pev = _XmPlatEventOf(ev);
+    if (_XmPlatEventIsLeave(pev))
         frame_set_cursor(c, curs_default);
 }
 
 void frame_motion_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) {
     (void)w; (void)cont;
     Client *c = (Client *)client_data;
-    if (ev->type == MotionNotify && c->pressed_btn == BTN_NONE) {
-        int edge = frame_edge_hit(c, ev->xmotion.x, ev->xmotion.y);
+    XmPlatEvent pev = _XmPlatEventOf(ev);
+    if (_XmPlatEventIsMotion(pev) && c->pressed_btn == BTN_NONE) {
+        int edge = frame_edge_hit(c, _XmPlatEventX(pev), _XmPlatEventY(pev));
         if (edge != EDGE_NONE && edge > 0 && edge < 16 && curs_resize[edge])
             frame_set_cursor(c, curs_resize[edge]);
         else
@@ -595,29 +600,32 @@ void frame_btn_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) {
     (void)w;
     Client *c = (Client *)client_data;
 
-    if (ev->type == ButtonPress) {
-        XButtonEvent *bev = &ev->xbutton;
+    XmPlatEvent pev = _XmPlatEventOf(ev);
+    if (_XmPlatEventIsButtonPress(pev)) {
+        unsigned int bev_state = _XmPlatEventState(pev);
+        unsigned int bev_button = _XmPlatEventButton(pev);
+        Time bev_time = _XmPlatEventTime(pev);
 
         /* Alt+click — handle move/resize (immediate, no press/release) */
-        if (bev->state & MODKEY) {
-            if (bev->button == Button1 || bev->button == Button3) {
+        if (bev_state & MODKEY) {
+            if (bev_button == Button1 || bev_button == Button3) {
                 *cont = False;
                 /* Release Xt's implicit grab from ButtonPress dispatch
                  * so our XGrabPointer in mousemove() can take effect */
-                XtUngrabPointer(w, bev->time);
+                XtUngrabPointer(w, bev_time);
                 XRaiseWindow(dpy, XtWindow(c->frame_shell));
                 focus(c);
-                if (!c->is_floating && bev->button == Button1) {
+                if (!c->is_floating && bev_button == Button1) {
                     /* Alt+LClick on tiled: make floating, then drag from title */
                     WmArg arg = {0};
                     togglefloat(&arg);
                     c->pressed_btn = BTN_TITLE;
                     drawframe(c);
-                    mousemove(c, Button1, EDGE_NONE, bev->x_root, bev->y_root);
+                    mousemove(c, Button1, EDGE_NONE, _XmPlatEventRootX(pev), _XmPlatEventRootY(pev));
                     c->pressed_btn = BTN_NONE;
                     drawframe(c);
                 } else {
-                    mousemove(c, bev->button, EDGE_NONE, bev->x_root, bev->y_root);
+                    mousemove(c, (int)bev_button, EDGE_NONE, _XmPlatEventRootX(pev), _XmPlatEventRootY(pev));
                 }
                 return;
             }
@@ -625,7 +633,7 @@ void frame_btn_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) {
 
         /* Determine which button/title was hit — check before border,
          * since buttons sit inside the border area on floating windows */
-        int hit = frame_button_hit(c, bev->x, bev->y);
+        int hit = frame_button_hit(c, _XmPlatEventX(pev), _XmPlatEventY(pev));
         if (hit != BTN_NONE) {
             *cont = False;
 
@@ -634,7 +642,7 @@ void frame_btn_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) {
                 c->pressed_btn = BTN_MENU;
                 drawframe(c);
                 /* Release Xt's implicit grab so run_menu's XGrabPointer can take effect */
-                XtUngrabPointer(w, bev->time);
+                XtUngrabPointer(w, bev_time);
                 int menu_x = c->x + FRAME_WIDTH;
                 int menu_y = c->y + FRAME_WIDTH + TITLE_HEIGHT;
                 show_window_menu(c, menu_x, menu_y);
@@ -650,8 +658,8 @@ void frame_btn_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) {
                 XRaiseWindow(dpy, XtWindow(c->frame_shell));
                 focus(c);
                 if (c->is_floating) {
-                    XtUngrabPointer(w, bev->time);
-                    mousemove(c, Button1, EDGE_NONE, bev->x_root, bev->y_root);
+                    XtUngrabPointer(w, bev_time);
+                    mousemove(c, Button1, EDGE_NONE, _XmPlatEventRootX(pev), _XmPlatEventRootY(pev));
                     c->pressed_btn = BTN_NONE;
                     drawframe(c);
                 }
@@ -665,32 +673,32 @@ void frame_btn_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) {
             /* Grab pointer so we track release even outside the window */
             XGrabPointer(dpy, XtWindow(c->frame_form), True,
                           ButtonReleaseMask | PointerMotionMask,
-                          GrabModeAsync, GrabModeAsync, None, None, bev->time);
+                          GrabModeAsync, GrabModeAsync, None, None, bev_time);
             return;
         }
 
         /* Check for border resize handle (floating only) */
-        int edge = frame_edge_hit(c, bev->x, bev->y);
+        int edge = frame_edge_hit(c, _XmPlatEventX(pev), _XmPlatEventY(pev));
         if (edge != EDGE_NONE) {
             *cont = False;
-            XtUngrabPointer(w, bev->time);
+            XtUngrabPointer(w, bev_time);
             XRaiseWindow(dpy, XtWindow(c->frame_shell));
             focus(c);
-            mousemove(c, Button3, edge, bev->x_root, bev->y_root);
+            mousemove(c, Button3, edge, _XmPlatEventRootX(pev), _XmPlatEventRootY(pev));
             return;
         }
 
         /* Click in border area that's not a button or resize handle — ignore */
         *cont = False;
     }
-    else if (ev->type == ButtonRelease) {
+    else if (_XmPlatEventIsButtonRelease(pev)) {
         int hit = c->pressed_btn;
         c->pressed_btn = BTN_NONE;
-        XUngrabPointer(dpy, ev->xbutton.time);
+        XUngrabPointer(dpy, _XmPlatEventTime(pev));
         drawframe(c);
 
         /* Check if release is still over the same button */
-        int cur_hit = frame_button_hit(c, ev->xbutton.x, ev->xbutton.y);
+        int cur_hit = frame_button_hit(c, _XmPlatEventX(pev), _XmPlatEventY(pev));
         if (cur_hit != hit) return;  /* released outside the button — cancel */
 
         switch (hit) {
@@ -712,10 +720,10 @@ void frame_btn_cb(Widget w, XtPointer client_data, XEvent *ev, Boolean *cont) {
             break;  /* handled on press */
         }
     }
-    else if (ev->type == MotionNotify) {
+    else if (_XmPlatEventIsMotion(pev)) {
         /* While button is held, update pressed state based on position */
         if (c->pressed_btn == BTN_NONE) return;
-        int hit = frame_button_hit(c, ev->xmotion.x, ev->xmotion.y);
+        int hit = frame_button_hit(c, _XmPlatEventX(pev), _XmPlatEventY(pev));
         if (hit != c->pressed_btn) {
             /* Pointer moved off the pressed button — show unpressed */
             c->pressed_btn = BTN_NONE;

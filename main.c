@@ -2,6 +2,7 @@
  * rondo — setup, cleanup, and main entry point
  */
 #include "wm.h"
+#include "xmplat_seam.h"
 #include <Imlib2.h>
 
 /* ── globals ───────────────────────────────────────────────────────── */
@@ -523,10 +524,11 @@ void setup(int *argc, char **argv) {
                 GrabModeAsync, GrabModeAsync, None, None);
 
     /* EWMH support */
-    /* intern all atoms in one round trip (XInternAtoms).
-     * XInternAtoms fills a flat Atom array — copy results into the globals. */
+    /* intern all atoms in one round trip through the platform backend
+     * (_XmPlatInternAtomsRaw — the XInternAtoms replacement, see the
+     * motif fork's MIGRATION_GUIDE §4.8) */
     {
-        Atom ids[37];
+        unsigned long ids[37];
         const char *names[] = {
             "WM_PROTOCOLS", "WM_DELETE_WINDOW", "WM_TAKE_FOCUS",
             "WM_STATE", "WM_CHANGE_STATE", "WM_NORMAL_HINTS",
@@ -550,7 +552,8 @@ void setup(int *argc, char **argv) {
             "_NET_SYSTEM_TRAY_OPCODE", "MANAGER", "_XEMBED",
         };
         int na = (int)(sizeof(names) / sizeof(names[0]));
-        if (XInternAtoms(dpy, (char **)names, na, False, ids)) {
+        {
+            _XmPlatInternAtomsRaw(dpy, (char **)names, (unsigned int)na, False, ids);
             Atom *out[] = {
                 &wm_protocols, &wm_delete_window, &wm_take_focus,
                 &wm_state, &wm_change_state, &wm_normal_hints,
@@ -574,20 +577,18 @@ void setup(int *argc, char **argv) {
                 &net_system_tray_opcode, &manager_atom, &xembed,
             };
             for (int i = 0; i < na; i++) *out[i] = ids[i];
-        } else {
-            fprintf(stderr, "rondo: XInternAtoms failed — atom-based protocols disabled\n");
         }
     }
-    Atom net_supporting = XInternAtom(dpy, "_NET_SUPPORTING_WM_CHECK", False);
-    Atom utf8_string    = XInternAtom(dpy, "UTF8_STRING", False);
+    Atom net_supporting = (Atom)_XmPlatInternAtomRaw(dpy, "_NET_SUPPORTING_WM_CHECK", False);
+    Atom utf8_string    = (Atom)_XmPlatInternAtomRaw(dpy, "UTF8_STRING", False);
     checkwin = XCreateSimpleWindow(dpy, root, -1, -1, 1, 1, 0, 0, 0);
-    XChangeProperty(dpy, checkwin, net_supporting, XA_WINDOW, 32,
-                    PropModeReplace, (unsigned char *)&checkwin, 1);
-    XChangeProperty(dpy, root, net_supporting, XA_WINDOW, 32,
-                    PropModeReplace, (unsigned char *)&checkwin, 1);
-    XChangeProperty(dpy, checkwin, net_wm_name_atom,
+    _XmPlatChangeProperty(dpy, (unsigned long)checkwin, net_supporting, XA_WINDOW, 32,
+                    PropModeReplace, (const unsigned char *)&checkwin, 1);
+    _XmPlatChangeProperty(dpy, (unsigned long)root, net_supporting, XA_WINDOW, 32,
+                    PropModeReplace, (const unsigned char *)&checkwin, 1);
+    _XmPlatChangeProperty(dpy, (unsigned long)checkwin, net_wm_name_atom,
                     utf8_string, 8,
-                    PropModeReplace, (unsigned char *)"rondo", 5);
+                    PropModeReplace, (const unsigned char *)"rondo", 5);
 
     /* set _NET_SUPPORTED — announce which EWMH atoms we support */
     {
@@ -606,8 +607,8 @@ void setup(int *argc, char **argv) {
             net_system_tray,
             net_supporting, net_wm_name_atom
         };
-        XChangeProperty(dpy, root, net_supported, XA_ATOM, 32,
-                        PropModeReplace, (unsigned char *)supported,
+        _XmPlatChangeProperty(dpy, (unsigned long)root, net_supported, XA_ATOM, 32,
+                        PropModeReplace, (const unsigned char *)supported,
                         (int)(sizeof(supported) / sizeof(Atom)));
     }
 

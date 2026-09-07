@@ -111,15 +111,18 @@ void mousemove(Client *c, int button, int edge, int x_root, int y_root) {
         }
 
         switch (ev.type) {
-        case MotionNotify:
+        case MotionNotify: {
+            /* event contract: wrap once, read through prims (guide §4.6);
+             * the sanctioned write path refreshes the record for hints */
+            XmPlatEvent pev = _XmPlatEventOf(&ev);
+            int mx = _XmPlatEventRootX(pev);
+            int my = _XmPlatEventRootY(pev);
             /* if hint, query pointer for actual position (mwm-style) */
-            if (ev.xmotion.is_hint == NotifyHint) {
+            if (_XmPlatEventIsHint(pev)) {
                 Window dw;
                 int di;
                 unsigned int du;
-                XQueryPointer(dpy, grab_win, &dw, &dw,
-                              &ev.xmotion.x_root, &ev.xmotion.y_root,
-                              &di, &di, &du);
+                XQueryPointer(dpy, grab_win, &dw, &dw, &mx, &my, &di, &di, &du);
             }
 
             /* erase old outline */
@@ -128,14 +131,14 @@ void mousemove(Client *c, int button, int edge, int x_root, int y_root) {
             /* compute new position/size */
             if (button == Button1) {
                 /* move */
-                cur_x = orig_x + (ev.xmotion.x_root - rx);
-                cur_y = orig_y + (ev.xmotion.y_root - ry);
+                cur_x = orig_x + (mx - rx);
+                cur_y = orig_y + (my - ry);
                 cur_w = orig_w;
                 cur_h = orig_h;
             } else if (button == Button3) {
                 /* directional resize */
-                int dx = ev.xmotion.x_root - rx;
-                int dy = ev.xmotion.y_root - ry;
+                int dx = mx - rx;
+                int dy = my - ry;
                 cur_x = orig_x; cur_y = orig_y;
                 cur_w = orig_w; cur_h = orig_h;
                 if (edge & EDGE_E) cur_w = orig_w + dx;
@@ -162,6 +165,7 @@ void mousemove(Client *c, int button, int edge, int x_root, int y_root) {
             fb_update(cur_x, cur_y, cur_w, cur_h, fb_style);
             XFlush(dpy);
             break;
+        }
 
         case ButtonRelease:
             /* erase outline + hide feedback */

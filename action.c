@@ -2,6 +2,7 @@
  * rondo — keybinding action handlers
  */
 #include "wm.h"
+#include "xmplat_seam.h"
 
 void spawn(const WmArg *arg) {
     const char **cmd = (const char **)arg->v;
@@ -23,7 +24,7 @@ static void kill_do_close(Client *c) {
         ev.xclient.format = 32;
         ev.xclient.data.l[0] = (long)wm_delete_window;
         ev.xclient.data.l[1] = (long)last_event_time;
-        XSendEvent(dpy, c->win, False, NoEventMask, &ev);
+        _XmPlatSendClientMessage(dpy, (unsigned long)c->win, False, NoEventMask, &ev);
     } else {
         XKillClient(dpy, c->win);
     }
@@ -279,8 +280,7 @@ void togglefullscreen(const WmArg *arg) {
         XRaiseWindow(dpy, XtWindow(focused->frame_shell));
         updateframe(focused);
         send_configure_notify(focused);
-        XChangeProperty(dpy, focused->win, net_wm_state, XA_ATOM, 32,
-                        PropModeReplace, (unsigned char *)&net_wm_state_fullscreen, 1);
+        _XmPlatChangeProperty(dpy, (unsigned long)focused->win, net_wm_state, XA_ATOM, 32, PropModeReplace, (const unsigned char *)&net_wm_state_fullscreen, 1);
     } else {
         focused->x = focused->oldx; focused->y = focused->oldy;
         focused->w = focused->oldw; focused->h = focused->oldh;
@@ -292,7 +292,7 @@ void togglefullscreen(const WmArg *arg) {
         send_configure_notify(focused);
         arrange();
         defer_schedule();
-        XChangeProperty(dpy, focused->win, net_wm_state, XA_ATOM, 32,
+        _XmPlatChangeProperty(dpy, (unsigned long)focused->win, net_wm_state, XA_ATOM, 32,
                         PropModeReplace, NULL, 0);
     }
 }
@@ -324,8 +324,7 @@ void viewworkspace(const WmArg *arg) {
             fade_window_in(c);
             /* update _NET_WM_DESKTOP for visible clients */
             long desktop = (long)c->ws;
-            XChangeProperty(dpy, c->win, net_wm_desktop, XA_CARDINAL, 32,
-                            PropModeReplace, (unsigned char *)&desktop, 1);
+            _XmPlatChangeProperty(dpy, (unsigned long)c->win, net_wm_desktop, XA_CARDINAL, 32, PropModeReplace, (const unsigned char *)&desktop, 1);
         }
 
     /* update _NET_CURRENT_DESKTOP */
@@ -357,8 +356,7 @@ void movetoworkspace(const WmArg *arg) {
     fade_window_out(focused, move_hide_cb);
     /* update _NET_WM_DESKTOP for the moved client */
     long desktop = (long)ws;
-    XChangeProperty(dpy, focused->win, net_wm_desktop, XA_CARDINAL, 32,
-                    PropModeReplace, (unsigned char *)&desktop, 1);
+    _XmPlatChangeProperty(dpy, (unsigned long)focused->win, net_wm_desktop, XA_CARDINAL, 32, PropModeReplace, (const unsigned char *)&desktop, 1);
     focus(nexttiled(clients));
     arrange();
     defer_schedule();

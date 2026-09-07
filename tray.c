@@ -3,6 +3,7 @@
  */
 #include "wm.h"
 #include <limits.h>
+#include "xmplat_seam.h"
 
 TrayIcon *tray_icons = NULL;
 int num_tray_icons = 0;
@@ -33,9 +34,9 @@ void tray_init(void) {
     /* advertise the visual for tray icons */
     if (argb_visual) {
         VisualID vid = XVisualIDFromVisual(argb_visual);
-        XChangeProperty(dpy, tray_win, net_system_tray_visual,
+        _XmPlatChangeProperty(dpy, (unsigned long)tray_win, net_system_tray_visual,
                         XA_VISUALID, 32, PropModeReplace,
-                        (unsigned char *)&vid, 1);
+                        (const unsigned char *)&vid, 1);
     }
 
     /* acquire the _NET_SYSTEM_TRAY_S0 selection */
@@ -50,7 +51,7 @@ void tray_init(void) {
     ev.data.l[0] = CurrentTime;
     ev.data.l[1] = (long)net_system_tray;
     ev.data.l[2] = (long)tray_win;
-    XSendEvent(dpy, root, False, StructureNotifyMask, (XEvent *)&ev);
+    _XmPlatSendClientMessage(dpy, (unsigned long)root, False, StructureNotifyMask, &ev);
 }
 
 void tray_dock(Window icon_win) {
@@ -95,7 +96,7 @@ void tray_dock(Window icon_win) {
     ev.xclient.data.l[1] = 0; /* XEMBED_EMBEDDED_NOTIFY */
     ev.xclient.data.l[2] = (long)wrapper;
     ev.xclient.data.l[3] = 0; /* XEMBED version */
-    XSendEvent(dpy, icon_win, False, NoEventMask, &ev);
+    _XmPlatSendClientMessage(dpy, (unsigned long)icon_win, False, NoEventMask, &ev);
 
     XMapWindow(dpy, icon_win);
     XMapWindow(dpy, wrapper);

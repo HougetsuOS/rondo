@@ -2,6 +2,7 @@
  * rondo — client management: manage, unmanage, focus, helpers
  */
 #include "wm.h"
+#include "xmplat_seam.h"
 #include <limits.h>
 
 /* ── client helpers ─────────────────────────────────────────────────── */
@@ -130,8 +131,8 @@ int client_supports_protocol(Client *c, Atom protocol) {
 void set_wm_state(Client *c, int state) {
     long icon = (state == IconicState && c->icon_window != None) ? (long)c->icon_window : None;
     long data[2] = { state, icon };
-    XChangeProperty(dpy, c->win, wm_state, wm_state, 32,
-                    PropModeReplace, (unsigned char *)data, 2);
+    _XmPlatChangeProperty(dpy, (unsigned long)c->win, wm_state, wm_state, 32,
+                    PropModeReplace, (const unsigned char *)data, 2);
 }
 
 void send_configure_notify(Client *c) {
@@ -151,7 +152,7 @@ void send_configure_notify(Client *c) {
         .above         = None,
         .override_redirect = False
     };
-    XSendEvent(dpy, c->win, False, StructureNotifyMask, (XEvent *)&ce);
+    _XmPlatSendClientMessage(dpy, (unsigned long)c->win, False, StructureNotifyMask, &ce);
 }
 
 void read_size_hints(Client *c) {
@@ -324,7 +325,7 @@ void focus(Client *c) {
         ev.xclient.format = 32;
         ev.xclient.data.l[0] = (long)wm_take_focus;
         ev.xclient.data.l[1] = (long)ts;
-        XSendEvent(dpy, c->win, False, NoEventMask, &ev);
+        _XmPlatSendClientMessage(dpy, (unsigned long)c->win, False, NoEventMask, &ev);
     }
     if (c->input_hint)
         XSetInputFocus(dpy, c->win, RevertToPointerRoot, ts);
@@ -352,8 +353,8 @@ void manage(Window w, XWindowAttributes *wa) {
         unsigned long nitems, bytes_after;
         unsigned char *data = NULL;
         int is_dialog = 0, is_splash = 0;
-        if (XGetWindowProperty(dpy, w, net_wm_window_type, 0, 1024, False,
-                               XA_ATOM, &actual_type, &actual_format,
+        if (_XmPlatGetWindowProperty(dpy, (unsigned long)w, net_wm_window_type, 0, 1024, False,
+                               XA_ATOM, (unsigned long *)&actual_type, &actual_format,
                                &nitems, &bytes_after, &data) == Success && data) {
             Atom *atoms = (Atom *)data;
             for (unsigned long i = 0; i < nitems; i++) {
@@ -583,8 +584,8 @@ void manage(Window w, XWindowAttributes *wa) {
         int actual_format;
         unsigned long nitems, bytes_after;
         unsigned char *data = NULL;
-        if (XGetWindowProperty(dpy, w, motif_wm_hints, 0, 5, False,
-                               motif_wm_hints, &actual_type, &actual_format,
+        if (_XmPlatGetWindowProperty(dpy, (unsigned long)w, motif_wm_hints, 0, 5, False,
+                               motif_wm_hints, (unsigned long *)&actual_type, &actual_format,
                                &nitems, &bytes_after, &data) == Success && data && nitems >= 3) {
             long *hints = (long *)data;
             long flags = hints[0];
@@ -623,8 +624,8 @@ void manage(Window w, XWindowAttributes *wa) {
 
     /* set _NET_WM_DESKTOP on client window */
     long desktop = c->ws;
-    XChangeProperty(dpy, c->win, net_wm_desktop, XA_CARDINAL, 32,
-                    PropModeReplace, (unsigned char *)&desktop, 1);
+    _XmPlatChangeProperty(dpy, (unsigned long)c->win, net_wm_desktop, XA_CARDINAL, 32,
+                    PropModeReplace, (const unsigned char *)&desktop, 1);
 
     /* update EWMH client list */
     defer_schedule();
@@ -738,7 +739,7 @@ void unmanage(Client *c, int destroyed) {
         set_wm_state(c, WithdrawnState);
         XReparentWindow(dpy, c->win, root, 0, 0);
         XUngrabButton(dpy, AnyButton, AnyModifier, c->win);
-        XDeleteProperty(dpy, c->win, net_wm_desktop);
+        _XmPlatDeleteProperty(dpy, (unsigned long)c->win, net_wm_desktop);
     }
     /* Destroy frame draw context and widgets */
     if (c->frame_draw) {

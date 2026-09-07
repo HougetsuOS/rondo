@@ -2,6 +2,7 @@
  * rondo — X event handlers and main event loop
  */
 #include "wm.h"
+#include "xmplat_seam.h"
 
 int handle_buttonpress(XButtonEvent *ev) {
     last_event_time = ev->time;
@@ -528,9 +529,9 @@ void run(void) {
                             int actual_format;
                             unsigned long nitems, bytes_after;
                             unsigned char *data = NULL;
-                            if (XGetWindowProperty(dpy, c->win, wm_colormap_windows,
+                            if (_XmPlatGetWindowProperty(dpy, (unsigned long)c->win, wm_colormap_windows,
                                                    0, 1024, False, XA_WINDOW,
-                                                   &actual_type, &actual_format,
+                                                   (unsigned long *)&actual_type, &actual_format,
                                                    &nitems, &bytes_after,
                                                    &data) == Success && data) {
                                 Window *wins = (Window *)data;

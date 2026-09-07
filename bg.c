@@ -314,7 +314,7 @@ void bg_load(void) {
     static Atom xrootpmap_cached = None;
     static int atom_ready = 0;
     if (!atom_ready) {
-        xrootpmap_cached = XInternAtom(dpy, "_XROOTPMAP_ID", False);
+        xrootpmap_cached = (Atom)_XmPlatInternAtomRaw(dpy, "_XROOTPMAP_ID", False);
         atom_ready = 1;
     }
     Atom xrootpmap = xrootpmap_cached;
@@ -327,7 +327,7 @@ void bg_load(void) {
             _XmPlatSurfaceFree(s);
         }
         /* remove pixmap property */
-        XDeleteProperty(dpy, root, xrootpmap);
+        _XmPlatDeleteProperty(dpy, (unsigned long)root, xrootpmap);
         /* compositor must re-fetch the cached bg color */
         compositor_bg_reloaded();
         return;
@@ -346,7 +346,7 @@ void bg_load(void) {
             _XmPlatClearWindow(s);
             _XmPlatSurfaceFree(s);
         }
-        XDeleteProperty(dpy, root, xrootpmap);
+        _XmPlatDeleteProperty(dpy, (unsigned long)root, xrootpmap);
         return;
     }
 
@@ -396,7 +396,7 @@ void bg_load(void) {
             _XmPlatClearWindow(s);
             _XmPlatSurfaceFree(s);
         }
-            XDeleteProperty(dpy, root, xrootpmap);
+            _XmPlatDeleteProperty(dpy, (unsigned long)root, xrootpmap);
             return;
         }
     }
@@ -410,8 +410,8 @@ void bg_load(void) {
         }
 
     /* set _XROOTPMAP_ID for other programs */
-    XChangeProperty(dpy, root, xrootpmap, XA_PIXMAP, 32,
-                    PropModeReplace, (unsigned char *)&pm, 1);
+    _XmPlatChangeProperty(dpy, (unsigned long)root, xrootpmap, XA_PIXMAP, 32,
+                    PropModeReplace, (const unsigned char *)&pm, 1);
 
     /* compositor must re-fetch the cached bg picture / color */
     compositor_bg_reloaded();

@@ -10,6 +10,7 @@
  * any damage occurs or opacity changes.
  */
 #include "wm.h"
+#include "xmplat_seam.h"
 
 /* ── compositing globals ────────────────────────────────────────────── */
 
@@ -84,8 +85,8 @@ static Picture alpha_picture = None;
 
 void set_opacity(Window win, unsigned int opacity)
 {
-    XChangeProperty(dpy, win, net_wm_window_opacity, XA_CARDINAL, 32,
-                    PropModeReplace, (unsigned char *)&opacity, 1);
+    _XmPlatChangeProperty(dpy, (unsigned long)win, net_wm_window_opacity, XA_CARDINAL, 32,
+                    PropModeReplace, (const unsigned char *)&opacity, 1);
 }
 
 /* ── tracked window management ──────────────────────────────────────── */
@@ -343,8 +344,8 @@ static unsigned int trk_opacity(TrkWin *t)
         unsigned long n, after;
         unsigned char *data = NULL;
         t->opacity = 0xFFFFFFFF;
-        if (XGetWindowProperty(dpy, t->win, net_wm_window_opacity, 0, 1, False,
-                               XA_CARDINAL, &actual, &fmt,
+        if (_XmPlatGetWindowProperty(dpy, (unsigned long)t->win, net_wm_window_opacity, 0, 1, False,
+                               XA_CARDINAL, (unsigned long *)&actual, &fmt,
                                &n, &after, &data) == Success && data && n > 0) {
             t->opacity = *(unsigned int *)data;
             XFree(data);
