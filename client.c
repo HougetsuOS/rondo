@@ -113,6 +113,7 @@ void updatewindowname(Client *c) {
     c->name[sizeof(c->name) - 1] = '\0';
     /* invalidate cached name extents */
     c->name_ext_font = NULL;
+    c->name_ext_len = 0;
 }
 
 /* ── ICCCM helpers ────────────────────────────────────────────────────── */

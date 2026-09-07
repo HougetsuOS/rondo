@@ -120,8 +120,9 @@ struct Client {
     int min_aspect_x, min_aspect_y;
     int max_aspect_x, max_aspect_y;
     char name[256];       /* window title (WM_NAME) */
-    XGlyphInfo name_ext;  /* cached extents of full name (font-tagged) */
+    XGlyphInfo name_ext;  /* cached extents of clipped name (font-tagged) */
     XftFont *name_ext_font;  /* font the extents were measured with */
+    int name_ext_len;        /* prefix length the extents were measured with */
     int is_closing;          /* client is being destroyed, frame kept for fade-out */
     int fading;                    /* 0=none, 1=fading in, -1=fading out */
     unsigned int opacity;         /* current opacity 0..0xFFFFFFFF */

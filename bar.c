@@ -1052,6 +1052,10 @@ static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw,
                 _XmPlatImageFree(mask_img);
             }
             GC mono_gc = XCreateGC(dpy, scaled_mask, 0, NULL);
+            /* XYBitmap upload maps 1-bits to the GC foreground — the clip
+             * mask needs pixel 1 where the icon is visible */
+            XSetForeground(dpy, mono_gc, 1);
+            XSetBackground(dpy, mono_gc, 0);
             if (have_mask_data) {
                 /* 1-bit LSBFirst XYBitmap token over caller-owned bits;
                  * _XmPlatPutImage uploads it in one request */
@@ -1103,13 +1107,18 @@ static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw,
         }
     }
 
-    /* blit the cached scaled icon to the target */
+    /* blit the cached scaled icon to the target.
+     * _XmPlatBlitMask is an XCopyPlane of the mask itself (it REPLACES the
+     * destination with the mask) — NOT a masked copy of src.  The icon must
+     * be blitted with the mask installed as the GC clip, exactly like the
+     * original XSetClipMask + XCopyArea sequence. */
     {
         XmPlatDrawCtx cctx = _XmPlatCtx(dpy, target, argb_gc);
         XmPlatSurface src = _XmPlatSurface(dpy, c->icon_scaled_pm);
         if (c->icon_mask != None) {
-            _XmPlatBlitMask(cctx, src, _XmPlatSurface(dpy, c->icon_scaled_mask),
-                            0, 0, ox, oy, (unsigned)sw, (unsigned)sh);
+            _XmPlatSetClipMaskSurf(cctx, _XmPlatSurface(dpy, c->icon_scaled_mask), ox, oy);
+            _XmPlatBlit(cctx, src, 0, 0, ox, oy, (unsigned)sw, (unsigned)sh);
+            _XmPlatClrClip(dpy, argb_gc);
         } else {
             _XmPlatBlit(cctx, src, 0, 0, ox, oy, (unsigned)sw, (unsigned)sh);
         }
@@ -1120,10 +1129,14 @@ static void draw_icon_scaled(Client *c, Drawable target, int dx, int dy, int dw,
 
 /* cached per-client name extents (measured when name/font changes) */
 static XGlyphInfo client_name_ext(Client *c) {
-    if (c->name_ext_font != xftfont) {
+    int max_chars = ICON_W / 6;
+    int namelen = (int)strlen(c->name);
+    if (namelen > max_chars) namelen = max_chars;
+    if (c->name_ext_font != xftfont || c->name_ext_len != namelen) {
         XftTextExtents8(dpy, xftfont, (XftChar8 *)c->name,
-                        (int)strlen(c->name), &c->name_ext);
+                        namelen, &c->name_ext);
         c->name_ext_font = xftfont;
+        c->name_ext_len = namelen;
     }
     return c->name_ext;
 }
